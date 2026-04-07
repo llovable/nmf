@@ -1,0 +1,26 @@
+
+# common-ignore-block
+# Large archives and raw datasets
+*.zip
+*.tar
+*.tar.gz
+data/
+
+# Local/dev artifacts
+.env
+.venv/
+__pycache__/
+node_modules/
+.vscode/
+
+# local-venv-layout
+bin/
+lib/
+lib64/
+share/
+pyvenv.cfg
+sratoolkit*/
+
+# repo-specific-large
+mochi_code/
+analysis/
