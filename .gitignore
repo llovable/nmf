@@ -22,5 +22,5 @@ pyvenv.cfg
 sratoolkit*/
 
 # repo-specific-large
-mochi_code/
 analysis/
+mochi_code/results/
