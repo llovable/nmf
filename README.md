@@ -1,67 +1,27 @@
-# NMF Repository Workflow
+# MOCHI
 
-This repository contains two separate code tracks:
+TCGA 멀티오믹스 **칸 결측**과 **블록 결측**을 한 모형에서 채우는 연구 코드입니다. OmicsNMF(NMF + GAN)를 세 오믹스 상호보정으로 확장합니다.
 
-- `mochi_code/`: base MOCHI model code
-- `mochi_code_universal/`: universal variant derived from base MOCHI
+보고 모형은 `mochi_code/train_nmf_tf.py` (오토인코더 은닉 + 고정 NMF 토큰 + 저랭크 잔차 + 조건부 WGAN)입니다.
 
-Large data artifacts are intentionally excluded from Git tracking.
+## 폴더
 
-## Working Rules
-
-Keep base and universal updates as separate commits whenever possible.
-
-- Base model changes: stage only `mochi_code/`
-- Universal changes: stage only `mochi_code_universal/`
-- Avoid mixed commits unless a shared fix is required
-
-Example:
-
-```bash
-# Base model only
-git add mochi_code
-git commit -m "feat: improve base mochi training loop"
-
-# Universal model only
-git add mochi_code_universal
-git commit -m "feat: add universal imputer option"
+```
+mochi_code/     현재 모델과 실험 (여기만 수정)
+baselines/      공식 OmicsNMF, OmiTrans, MIMIR (비교군, 수정하지 않음, gitignore)
+archive/        예전 파이프라인, 노트북, 툴킷
 ```
 
-## Commit Message Convention
-
-Use a short conventional prefix:
-
-- `feat`: new functionality
-- `fix`: bug fix
-- `chore`: maintenance/config/docs
-- `refactor`: code cleanup without behavior change
-
-Message format:
-
-`<type>: <what changed and why>`
-
-Examples:
-
-- `feat: add universal evaluation script for missing modality`
-- `fix: handle empty batch in base dataloader`
-- `chore: update ignore rules for local toolkit files`
-
-## Branch Strategy
-
-Recommended branch model:
-
-- `main`: stable branch
-- `feature/<topic>`: new work
-- `fix/<topic>`: bug fixes
-
-Typical flow:
-
 ```bash
-git checkout -b feature/base-loss-tuning
-# work...
-git add mochi_code
-git commit -m "feat: tune base loss weighting"
-git push -u origin feature/base-loss-tuning
+source /home/dyan/nmf/.nmf/bin/activate
+cd mochi_code
+python train_nmf_tf.py --gpu 0
+python paper/figures/plot_pathway_knockout.py
 ```
 
-Then open a pull request to `main` and merge after review.
+그림 1은 `mochi_code/paper/figures/fig1_pathway_knockout.pdf`입니다.
+
+## 커밋
+
+- 모델·논문: `mochi_code/`만 스테이징 (결과·전처리 행렬은 gitignore)
+- 공식 베이스라인은 `baselines/`에 그대로 둠

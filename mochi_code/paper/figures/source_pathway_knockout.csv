@@ -1,0 +1,24 @@
+panel,cohort,method,omics,metric,value
+A,BRCA,Mean,rna,pathway_sd_ratio,0.0
+A,BRCA,Ridge 2→1,rna,pathway_sd_ratio,0.7559
+A,BRCA,MIMIR,rna,pathway_sd_ratio,0.8825
+A,BRCA,MOCHI,rna,pathway_sd_ratio,0.9730
+A,BRCA,Mean,rna,pathway_r,0.0
+A,BRCA,Ridge 2→1,rna,pathway_r,0.7165
+A,BRCA,MIMIR,rna,pathway_r,0.7952
+A,BRCA,MOCHI,rna,pathway_r,0.6628
+B,BRCA,MOCHI,rna,pathway_sd_ratio,0.9730
+B,BRCA,Knockout,rna,pathway_sd_ratio,0.5564
+B,LUAD,MOCHI,rna,pathway_sd_ratio,0.8461
+B,LUAD,Knockout,rna,pathway_sd_ratio,0.4833
+B,KIRC,MOCHI,rna,pathway_sd_ratio,0.7959
+B,KIRC,Knockout,rna,pathway_sd_ratio,0.4454
+C,BRCA,delta,rna,z_rmse,0.0118
+C,BRCA,delta,methyl,z_rmse,0.0069
+C,BRCA,delta,protein,z_rmse,-0.0231
+C,LUAD,delta,rna,z_rmse,0.0129
+C,LUAD,delta,methyl,z_rmse,0.0145
+C,LUAD,delta,protein,z_rmse,-0.0240
+C,KIRC,delta,rna,z_rmse,0.0251
+C,KIRC,delta,methyl,z_rmse,0.0422
+C,KIRC,delta,protein,z_rmse,-0.0317

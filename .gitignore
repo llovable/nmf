@@ -23,4 +23,8 @@ sratoolkit*/
 
 # repo-specific-large
 analysis/
+archive/analysis/
+archive/unrelated/
 mochi_code/results/
+mochi_code/processed_data/
+baselines/
