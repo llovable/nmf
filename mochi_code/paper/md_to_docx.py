@@ -4,12 +4,15 @@
 
 import re
 import sys
+from pathlib import Path
+
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-SRC = "/home/dyan/nmf/mochi_code/paper/manuscript_draft_260818.md"
-DST = "/home/dyan/nmf/mochi_code/paper/manuscript_draft_260818.docx"
+HERE = Path(__file__).resolve().parent
+SRC = str(HERE / "manuscript_draft_260818.md")
+DST = str(HERE / "manuscript_draft_260818.docx")
 
 # ---- LaTeX -> 읽기 쉬운 유니코드 텍스트(근사) ----
 LATEX_MAP = [
