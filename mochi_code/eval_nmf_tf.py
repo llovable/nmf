@@ -63,8 +63,16 @@ def main():
     print(f"softImpute rank chosen on val: {si_rank}  (val z-RMSE by rank: "
           + ", ".join(f"{r}:{s:.4f}" for r, s in si_scores.items()) + ")")
     print("loading v5 / MIMIR / shared / NMF-TF...")
-    mochi2 = load_v5(args.v5_ckpt, dims["rna"], dims["protein"], dims["methyl"], device)
-    mimir, mimir_mv = load_mimir(args.mimir_dir, device)
+    mochi2 = None
+    if Path(args.v5_ckpt).exists():
+        mochi2 = load_v5(args.v5_ckpt, dims["rna"], dims["protein"], dims["methyl"], device)
+    else:
+        print(f"skip MOCHI-v5: {args.v5_ckpt} 없음")
+    mimir = mimir_mv = None
+    if args.mimir_dir and (Path(args.mimir_dir) / "shared_best.pt").exists():
+        mimir, mimir_mv = load_mimir(args.mimir_dir, device)
+    else:
+        print(f"skip MIMIR: {args.mimir_dir} 에 shared_best.pt 없음")
     shared = None
     shared_tag = "mean-z"
     if Path(args.shared_ckpt).exists():
@@ -107,9 +115,10 @@ def main():
                                          pred_ridge(ridge1, filled, "1to1"), masks, stats)
                     rows += score_method("Ridge", "2to1", mechanism, split, rate, seed, ytrue,
                                          pred_ridge(ridge2, filled, "2to1"), masks, stats)
-                    rows += score_method("MOCHI-v5", "2to1", mechanism, split, rate, seed, ytrue,
-                                         predict_2to1(mochi2, filled["rna"], filled["protein"],
-                                                      filled["methyl"], device), masks, stats)
+                    if mochi2 is not None:
+                        rows += score_method("MOCHI-v5", "2to1", mechanism, split, rate, seed, ytrue,
+                                             predict_2to1(mochi2, filled["rna"], filled["protein"],
+                                                          filled["methyl"], device), masks, stats)
                     if shared is not None:
                         rows += score_method("MOCHI-shared", shared_tag, mechanism, split, rate, seed,
                                              ytrue, predict_shared(shared, filled, device, missing=None),
@@ -117,10 +126,11 @@ def main():
                     rows += score_method("MOCHI-NMFTF", "nmf-tf", mechanism, split, rate, seed, ytrue,
                                          predict_nmf_tf(nmftf, filled, device, missing=None),
                                          masks, stats)
-                    dfs = {m: pd.DataFrame(nan_tabs[m], index=index, columns=columns[m]) for m in MODS}
-                    rows += score_method("MIMIR", "shared", mechanism, split, rate, seed, ytrue,
-                                         predict_values(mimir, mimir_mv, dfs, device),
-                                         masks, stats)
+                    if mimir is not None:
+                        dfs = {m: pd.DataFrame(nan_tabs[m], index=index, columns=columns[m]) for m in MODS}
+                        rows += score_method("MIMIR", "shared", mechanism, split, rate, seed, ytrue,
+                                             predict_values(mimir, mimir_mv, dfs, device),
+                                             masks, stats)
                     for nm, hat in all_self_predictions(
                             nan_tabs, ridge_self=ridge_self, filled_tabs=filled,
                             si_rank=si_rank, anchor_tabs=train_tabs).items():
@@ -147,9 +157,10 @@ def main():
                                   pred_ridge(ridge1, filled, "1to1"), masks, stats)
             block += score_method("Ridge", "2to1", "block", split, 1.0, 0, ytrue,
                                   pred_ridge(ridge2, filled, "2to1"), masks, stats)
-            block += score_method("MOCHI-v5", "2to1", "block", split, 1.0, 0, ytrue,
-                                  predict_2to1(mochi2, filled["rna"], filled["protein"],
-                                               filled["methyl"], device), masks, stats)
+            if mochi2 is not None:
+                block += score_method("MOCHI-v5", "2to1", "block", split, 1.0, 0, ytrue,
+                                      predict_2to1(mochi2, filled["rna"], filled["protein"],
+                                                   filled["methyl"], device), masks, stats)
             if shared is not None:
                 block += score_method("MOCHI-shared", shared_tag, "block", split, 1.0, 0, ytrue,
                                       predict_shared(shared, filled, device, missing=tgt),
@@ -157,9 +168,10 @@ def main():
             block += score_method("MOCHI-NMFTF", "nmf-tf", "block", split, 1.0, 0, ytrue,
                                   predict_nmf_tf(nmftf, filled, device, missing=tgt),
                                   masks, stats)
-            mh = {m: filled[m].copy() for m in MODS}
-            mh[tgt] = predict_block(mimir, mimir_mv, present, tgt, columns[tgt], index, device)
-            block += score_method("MIMIR", "shared", "block", split, 1.0, 0, ytrue, mh, masks, stats)
+            if mimir is not None:
+                mh = {m: filled[m].copy() for m in MODS}
+                mh[tgt] = predict_block(mimir, mimir_mv, present, tgt, columns[tgt], index, device)
+                block += score_method("MIMIR", "shared", "block", split, 1.0, 0, ytrue, mh, masks, stats)
             # 블록에서 오믹스별 KNN/softImpute는 열 평균(z=0)으로 퇴화한다. 그대로 보고한다:
             # '블록 결측은 교차 오믹스 없이 풀리지 않는다'는 직접 근거가 된다.
             for nm, hat in all_self_predictions(

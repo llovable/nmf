@@ -253,7 +253,7 @@ MOCHI가 앞서는 축은 하나다. RNA 블록의 경로 표준편차 비가 0.
 
 단백질은 반대다. 잘라내면 z-RMSE가 세 암종에서 모두 좋아진다(BRCA 0.905→0.882, KIRC 0.874→0.842; 그림 1C). 항체 487개로 이루어진 RPPA 층은 유전자 발현 축에서 뽑은 랭크-20 구조로 잘 설명되지 않아, 저랭크 항이 오차를 더한다. 다만 같은 조건에서 RNA-단백질 프로파일 상관은 0.900에서 0.882로 내려간다. 오차와 생물학적 구조가 여기서도 갈린다.
 
-저랭크 경로의 대가는 작다. 세 코호트 블록 z-RMSE 평균은 저랭크를 넣은 0.837/0.858/0.851 대 넣지 않은 BRCA 0.839이며, BRCA에서는 오히려 넣은 쪽이 낮다. 표 11의 수치는 \(\gamma\)를 본체와 같은 학습률로 둔 체크포인트에서 잰 것이다. 그 설정에서 \(\gamma_t\)는 0.3에서 0.29–0.34로만 움직였다. 전용 학습률을 넣은 뒤 BRCA에서 \(\gamma\)가 오믹스별로 어디로 수렴하는지는 재학습이 필요하다.
+저랭크 경로의 대가는 작다. 세 코호트 블록 z-RMSE 평균은 저랭크를 넣은 0.837/0.858/0.851 대 넣지 않은 BRCA 0.839이며, BRCA에서는 오히려 넣은 쪽이 낮다. 표 11의 수치는 \(\gamma\)를 본체와 같은 학습률로 둔 **패치 전** 체크포인트에서 잰 것이다. 그 설정에서 \(\gamma_t\)는 0.3에서 0.29–0.34로만 움직였다. 전용 학습률(\(\mathrm{lr}=10^{-2}\), weight decay 없음)과 `--gamma_nonneg`(실효 게이트 \(\mathrm{softplus}\))를 넣은 BRCA 재학습(시드 0, epoch 126)에서는 실효 \(\gamma\)가 단백질 0.317, RNA 0.388, 메틸화 0.498로 갈라졌다. 단백질 게이트가 가장 작은 것은 저랭크 항이 RPPA 오차를 키운다는 녹아웃 방향과 맞다. 표 10–11과 그림 1의 검사 집합 수치는 이 체크포인트의 `eval_biology` / `eval_ablation`으로 갈아끼우는 중이다.
 
 ---
 
@@ -464,4 +464,5 @@ Zhou, X. et al. (2020) TDimpute. *관련 원논문, 투고 전 서지 확정.*
 - 하위 과제 레이블은 UCSC Xena TCGA BRCA clinicalMatrix에서 가져왔다. PAM50은 RNA 유래이므로 ER·HER2·병기를 우선으로 읽는다.
 - 그림 1은 `paper/figures/plot_pathway_knockout.py`로 그린다. 원자료는 `make_source_data.py`가 만든다. 커밋된 `source_pathway_knockout.csv`에는 Panel B의 녹아웃 \(r\)이 아직 없다. 옛 CSV로 그림을 돌리면 재생성 안내와 함께 멈춘다. 자리표시 값을 넣지 않는다.
 - 그림 2는 `paper/figures/plot_architecture.py`다.
-- 2026-08-23 패치 A/B/C (`mochi_ABC.patch`): γ 전용 학습률·softplus 비음수, NMF 손실 W에 ReLU, 자기정보 베이스라인 4종. `tests/test_patches.py` 17개 통과. 표 1–11과 그림 1은 패치 전 체크포인트 수치이므로, BRCA/LUAD/KIRC 재학습 후 갈아끼워야 한다.
+- 2026-08-23 패치 A/B/C (`mochi_ABC.patch`): γ 전용 학습률·softplus 비음수, NMF 손실 W에 ReLU, 자기정보 베이스라인 4종. `tests/test_patches.py` 통과. 표 1–11과 그림 1은 패치 전 체크포인트 수치이므로, BRCA/LUAD/KIRC 재학습 후 갈아끼워야 한다.
+- 2026-08-23 BRCA 재학습(`results/current/lr_brca_hybrid`, `--gamma_nonneg`, 시드 0): 검증 블록 z-RMSE 0.913(P 1.000 / R 0.856 / M 0.883), 실효 γ = (단백질 0.317, RNA 0.388, 메틸화 0.498). MIMIR `src`가 없어도 `eval_biology`/`eval_ablation`이 import되게 `mimir_wrap`을 지연 로드로 바꿨다.

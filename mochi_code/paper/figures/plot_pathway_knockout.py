@@ -24,6 +24,8 @@ CSV = HERE / "source_pathway_knockout.csv"
 PDF = HERE / "fig1_pathway_knockout.pdf"
 PNG = HERE / "fig1_pathway_knockout.png"
 
+PREFERRED_COHORTS = ["BRCA", "LUAD", "KIRC"]
+
 COL = {
     # Mean은 값이 0인 기준선이라 색으로 식별할 필요가 없다. 중립 잉크로 둔다.
     # 나머지 세 방법의 색은 색각이상 대비 검증을 통과한다
@@ -61,6 +63,21 @@ def panel_label(ax, letter):
         0.0, 1.08, letter, transform=ax.transAxes,
         fontsize=11, fontweight="bold", va="bottom", ha="right",
     )
+
+
+def cohorts_in(df, panel):
+    """CSV에 실제로 있는 코호트만, BRCA → LUAD → KIRC 순으로 쓴다.
+
+    세 암종이 아직 다 안 나온 중간 실행에서도 그림이 돌아가게 한다.
+    없는 코호트를 0으로 채우지는 않는다.
+    """
+    have = set(df.loc[df.panel == panel, "cohort"].astype(str))
+    ordered = [c for c in PREFERRED_COHORTS if c in have]
+    extra = sorted(have - set(PREFERRED_COHORTS))
+    out = ordered + extra
+    if not out:
+        raise SystemExit(f"source_pathway_knockout.csv panel {panel}에 코호트가 없습니다.")
+    return out
 
 
 def _need(sel, what):
@@ -137,7 +154,7 @@ def draw_b(ax, df):
     행은 코호트 × 지표. SD 비만 그리면 저랭크가 순서(r)에 무슨 일을
     하는지 알 수 없다.
     """
-    cohorts = ["BRCA", "LUAD", "KIRC"]
+    cohorts = cohorts_in(df, "B")
     metrics = [("pathway_sd_ratio", "SD ratio"), ("pathway_r", "$r$")]
     rows, labels = [], []
     for c in cohorts:
@@ -185,7 +202,7 @@ def draw_b(ax, df):
 
 
 def draw_c(ax, df):
-    cohorts = ["BRCA", "LUAD", "KIRC"]
+    cohorts = cohorts_in(df, "C")
     omics = [("rna", "RNA"), ("methyl", "Methylation"), ("protein", "Protein")]
     x = np.arange(len(cohorts))
     width = 0.17

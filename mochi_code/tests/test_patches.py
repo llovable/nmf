@@ -317,9 +317,29 @@ def test_e():
               "재생성 안내와 함께 종료")
 
 
+def test_f():
+    """MIMIR 패키지가 없어도 평가 스크립트를 import할 수 있어야 한다."""
+    print("F) MIMIR 소스 없이 eval import")
+    import eval_ablation  # noqa: F401
+    import eval_biology  # noqa: F401
+    import eval_mcar_mnar  # noqa: F401
+    import eval_nmf_tf  # noqa: F401
+    import mimir_wrap
+    check("eval_biology / eval_ablation / eval_nmf_tf import", True)
+    check("frames_from_dir는 src 없이 존재", callable(mimir_wrap.frames_from_dir))
+    if mimir_wrap._mimir_root() is None:
+        try:
+            mimir_wrap._import_mimir_src()
+            check("src 없으면 ImportError", False, "예외가 나지 않음")
+        except ImportError as e:
+            check("src 없으면 ImportError", "MIMIR 소스" in str(e), str(e)[:80])
+    else:
+        check("설치된 MIMIR src를 찾는다", True, str(mimir_wrap._mimir_root()))
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
-    test_a(); test_b(); test_c(); test_d(); test_e()
+    test_a(); test_b(); test_c(); test_d(); test_e(); test_f()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))
