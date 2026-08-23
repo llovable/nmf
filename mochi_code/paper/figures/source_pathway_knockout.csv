@@ -15,9 +15,16 @@ B,LUAD,MOCHI,rna,pathway_sd_ratio,0.8454
 B,LUAD,Knockout,rna,pathway_sd_ratio,0.4858
 B,LUAD,MOCHI,rna,pathway_r,0.6971
 B,LUAD,Knockout,rna,pathway_r,0.6605
+B,KIRC,MOCHI,rna,pathway_sd_ratio,0.6723
+B,KIRC,Knockout,rna,pathway_sd_ratio,0.3753
+B,KIRC,MOCHI,rna,pathway_r,0.5916
+B,KIRC,Knockout,rna,pathway_r,0.5098
 C,BRCA,delta,rna,z_rmse,0.0930
 C,BRCA,delta,methyl,z_rmse,0.0697
 C,BRCA,delta,protein,z_rmse,-0.0071
 C,LUAD,delta,rna,z_rmse,0.0203
 C,LUAD,delta,methyl,z_rmse,0.0395
 C,LUAD,delta,protein,z_rmse,-0.0301
+C,KIRC,delta,rna,z_rmse,0.0628
+C,KIRC,delta,methyl,z_rmse,0.1121
+C,KIRC,delta,protein,z_rmse,0.0012
