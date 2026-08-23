@@ -337,9 +337,30 @@ def test_f():
         check("설치된 MIMIR src를 찾는다", True, str(mimir_wrap._mimir_root()))
 
 
+def test_g():
+    """/dev/null 은 Path.exists()가 True라, 확장자·크기 가드가 없으면 EOFError."""
+    import tempfile
+    from eval_nmf_tf import _is_ckpt
+    print("G) 체크포인트 경로 가드")
+    check("/dev/null은 체크포인트가 아니다", not _is_ckpt("/dev/null"))
+    check("없는 경로는 체크포인트가 아니다", not _is_ckpt("/tmp/definitely_missing_v5.ckpt"))
+    with tempfile.NamedTemporaryFile(suffix=".ckpt") as f:
+        f.write(b"x" * 100)
+        f.flush()
+        check("1KB 이하 .ckpt는 거절", not _is_ckpt(f.name))
+    with tempfile.NamedTemporaryFile(suffix=".ckpt") as f:
+        f.write(b"x" * 2048)
+        f.flush()
+        check("실제 크기 .ckpt는 통과", _is_ckpt(f.name))
+    with tempfile.NamedTemporaryFile(suffix=".txt") as f:
+        f.write(b"x" * 2048)
+        f.flush()
+        check(".txt는 거절", not _is_ckpt(f.name))
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
-    test_a(); test_b(); test_c(); test_d(); test_e(); test_f()
+    test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

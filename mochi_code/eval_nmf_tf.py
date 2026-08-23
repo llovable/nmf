@@ -23,6 +23,11 @@ from models_shared import load_shared, predict_shared
 from train_gate import TripleSplitDataset
 
 
+def _is_ckpt(path):
+    p = Path(path)
+    return p.is_file() and p.suffix in {".ckpt", ".pt"} and p.stat().st_size > 1024
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", default="/home/dyan/nmf/mochi_code/processed_data/gate_brca")
@@ -64,7 +69,7 @@ def main():
           + ", ".join(f"{r}:{s:.4f}" for r, s in si_scores.items()) + ")")
     print("loading v5 / MIMIR / shared / NMF-TF...")
     mochi2 = None
-    if Path(args.v5_ckpt).exists():
+    if _is_ckpt(args.v5_ckpt):
         mochi2 = load_v5(args.v5_ckpt, dims["rna"], dims["protein"], dims["methyl"], device)
     else:
         print(f"skip MOCHI-v5: {args.v5_ckpt} 없음")
@@ -75,7 +80,7 @@ def main():
         print(f"skip MIMIR: {args.mimir_dir} 에 shared_best.pt 없음")
     shared = None
     shared_tag = "mean-z"
-    if Path(args.shared_ckpt).exists():
+    if _is_ckpt(args.shared_ckpt):
         shared = load_shared(args.shared_ckpt, dims, device)
         shared_tag = f"{getattr(shared, 'fuse_name', 'mean')}-z"
     ckpt = Path(args.nmf_tf_ckpt)

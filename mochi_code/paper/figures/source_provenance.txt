@@ -1,6 +1,8 @@
-생성 시각: 2026-08-23T15:27:39
+생성 시각: 2026-08-23T15:55:16
 Panel A 코호트: BRCA
 Panel C 분할: test
 
 biology   BRCA   results/current/bio_brca/biology.tsv  (985 bytes, mtime 2026-08-23T15:26:42)
+biology   LUAD   results/current/bio_luad/biology.tsv  (734 bytes, mtime 2026-08-23T15:40:16)
 ablation  BRCA   results/current/abl_brca/eval_summary.tsv  (13833 bytes, mtime 2026-08-23T15:14:38)
+ablation  LUAD   results/current/abl_luad/eval_summary.tsv  (13779 bytes, mtime 2026-08-23T15:42:29)
