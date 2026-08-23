@@ -194,9 +194,132 @@ def test_c():
           f"anchor 사용 {e_con:.4f} vs 평균 대치 {e_mean:.4f}")
 
 
+def test_d():
+    """레거시 비교군의 NMF 손실 정의가 조용히 바뀌지 않는지 지킨다.
+
+    nmf_recon_loss의 기본값이 nonneg=True로 바뀌었으므로, 논문 표의 MOCHI-v5
+    수치를 만든 train_gate.py / compare_gate.py 경로는 nonneg를 **명시적으로**
+    넘겨야 한다. 명시하지 않으면 v5를 재학습할 때 손실이 달라져 표가 재현되지
+    않는다. 소스를 AST로 훑어 모든 호출이 nonneg를 명시하는지 확인한다.
+    """
+    import ast
+    print("D) 레거시 비교군 손실 정의 고정")
+    root = Path(__file__).resolve().parent.parent
+    for fname in ("train_gate.py", "compare_gate.py"):
+        tree = ast.parse((root / fname).read_text())
+        calls = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "nmf_recon_loss"]
+        check(f"{fname}에 nmf_recon_loss 호출이 존재", len(calls) > 0, f"{len(calls)}건")
+        named = [c for c in calls if any(kw.arg == "nonneg" for kw in c.keywords)]
+        check(f"{fname}의 모든 호출이 nonneg를 명시", len(named) == len(calls),
+              f"{len(named)}/{len(calls)}건 명시")
+        pinned = [c for c in named
+                  if any(kw.arg == "nonneg" and isinstance(kw.value, ast.Constant)
+                         and kw.value.value is False for kw in c.keywords)]
+        check(f"{fname}의 모든 호출이 nonneg=False로 고정", len(pinned) == len(calls),
+              f"{len(pinned)}/{len(calls)}건 고정 — 표의 MOCHI-v5 정의 보존")
+
+    # 보고 모형은 반대로 플래그를 따라가야 한다.
+    tree = ast.parse((root / "train_nmf_tf.py").read_text())
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "nmf_recon_loss"]
+    via_flag = [c for c in calls
+                if any(kw.arg == "nonneg" and isinstance(kw.value, ast.Name)
+                       and kw.value.id == "nmf_nonneg" for kw in c.keywords)]
+    check("train_nmf_tf.py는 --nmf_nonneg 플래그를 따른다",
+          len(calls) > 0 and len(via_flag) == len(calls),
+          f"{len(via_flag)}/{len(calls)}건")
+
+
+def test_e():
+    """그림 1 파이프라인: eval 출력 -> CSV -> 그림이 코드로 이어지는지.
+
+    합성 biology.tsv / eval_summary.tsv를 만들어 make_source_data.py를 돌리고,
+    나온 CSV로 plot_pathway_knockout.py가 실제로 렌더되는지 확인한다.
+    수치가 없을 때 조용히 넘어가지 않고 멈추는지도 함께 본다.
+    """
+    import subprocess, sys, tempfile
+    import pandas as pd
+    print("E) 그림 1 원자료 생성 파이프라인")
+    figdir = Path(__file__).resolve().parent.parent / "paper" / "figures"
+    cohorts = ["BRCA", "LUAD", "KIRC"]
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        bio_args, abl_args = [], []
+        for ci, c in enumerate(cohorts):
+            rows = []
+            for meth, sd, r in (("mean", 0.0, 0.0), ("Ridge-2to1", 0.75, 0.72),
+                                ("MIMIR", 0.88, 0.80), ("MOCHI", 0.97 - 0.05 * ci, 0.66),
+                                ("MOCHI-knockout", 0.55 - 0.05 * ci, 0.71)):
+                rows.append({"modality": "rna", "method": meth,
+                             "pathway_sd_ratio": sd, "pathway_r": r})
+            bp = td / f"biology_{c}.tsv"
+            pd.DataFrame(rows).to_csv(bp, sep="\t", index=False)
+            bio_args.append(f"{c}={bp}")
+
+            arows = []
+            for om, rep, kno in (("rna", 0.80, 0.81), ("methyl", 0.62, 0.63),
+                                 ("protein", 0.43, 0.41)):
+                for meth, setting, z in (("MOCHI", "self-w10", rep),
+                                         ("MOCHI-knockout", "ablation", kno)):
+                    arows.append({"method": meth, "setting": setting,
+                                  "mechanism": "block", "split": "test", "rate": 1.0,
+                                  "missing": om, "modality": om, "z_rmse": z})
+            ap_ = td / f"ablate_{c}.tsv"
+            pd.DataFrame(arows).to_csv(ap_, sep="\t", index=False)
+            abl_args.append(f"{c}={ap_}")
+
+        out_csv = td / "source_pathway_knockout.csv"
+        res = subprocess.run(
+            [sys.executable, str(figdir / "make_source_data.py"),
+             "--biology", *bio_args, "--ablation", *abl_args, "--out", str(out_csv)],
+            capture_output=True, text=True)
+        check("make_source_data.py가 정상 종료", res.returncode == 0,
+              res.stderr.strip().splitlines()[-1] if res.returncode else "")
+        if res.returncode:
+            return
+
+        df = pd.read_csv(out_csv)
+        check("Panel A에 두 지표가 모두 있다",
+              set(df[df.panel == "A"].metric) == {"pathway_sd_ratio", "pathway_r"},
+              f"{sorted(set(df[df.panel == 'A'].metric))}")
+        check("Panel B에 코호트 3 × 지표 2 × 조건 2 = 12행",
+              len(df[df.panel == "B"]) == 12, f"{len(df[df.panel == 'B'])}행")
+        c_prot = df[(df.panel == "C") & (df.omics == "protein")].value
+        check("Panel C의 delta가 knockout − MOCHI로 계산된다",
+              bool((c_prot < 0).all()),
+              f"protein delta = {[round(v, 4) for v in c_prot]} (0.41 − 0.43 = −0.02)")
+
+        # 스크립트를 실제 파일로 복사해 그대로 실행한다 (HERE = 스크립트 위치).
+        import shutil
+        sandbox = td / "figs"
+        sandbox.mkdir()
+        shutil.copy(figdir / "plot_pathway_knockout.py", sandbox)
+        shutil.copy(out_csv, sandbox / "source_pathway_knockout.csv")
+        res3 = subprocess.run([sys.executable, str(sandbox / "plot_pathway_knockout.py")],
+                              capture_output=True, text=True)
+        png = sandbox / "fig1_pathway_knockout.png"
+        check("생성된 CSV로 그림이 렌더된다", res3.returncode == 0 and png.exists(),
+              (res3.stderr.strip().splitlines()[-1] if res3.returncode
+               else f"{png.stat().st_size} bytes"))
+
+        # 없는 행이 있으면 조용히 그려지지 않고 멈춰야 한다.
+        df[df.metric != "pathway_r"].to_csv(sandbox / "source_pathway_knockout.csv",
+                                            index=False)
+        res2 = subprocess.run([sys.executable, str(sandbox / "plot_pathway_knockout.py")],
+                              capture_output=True, text=True)
+        out = res2.stdout + res2.stderr
+        check("r 행이 빠지면 그림이 조용히 그려지지 않고 멈춘다",
+              res2.returncode != 0 and "pathway_r" in out and "make_source_data" in out,
+              "재생성 안내와 함께 종료")
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
-    test_a(); test_b(); test_c()
+    test_a(); test_b(); test_c(); test_d(); test_e()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

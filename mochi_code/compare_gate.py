@@ -166,7 +166,9 @@ class PairTrainer:
         fake = self.G(src, src=None)
         mse = ((fake - tgt) ** 2).mean()
         g_wgan = -self.D(fake).mean()
-        nmf = nmf_recon_loss(fake, self.nmf_basis)
+        # nonneg=False 고정: 이 1→1 번역기는 논문 표의 MOCHI-v5(1to1) 비교군이다.
+        # nmf_recon_loss의 기본값 변경이 비교군 정의를 조용히 바꾸지 않게 못 박는다.
+        nmf = nmf_recon_loss(fake, self.nmf_basis, nonneg=False)
         mse_term = self.mse_weight * mse
         target = self.gan_to_mse * mse_term.detach().abs()
         scale = target / g_wgan.detach().abs().clamp_min(1e-8)

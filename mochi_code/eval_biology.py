@@ -131,6 +131,10 @@ def main():
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--runs", nargs="+", default=[
         "MOCHI=/home/dyan/nmf/mochi_code/results/current/gate_nmf_tf_h/nmf_tf_best.ckpt",
+        # 같은 가중치에서 저랭크 잔차만 끈 녹아웃. 그림 1 Panel B가 이 행을 쓴다.
+        # 기본 실행에 넣어야 진폭(pathway_sd_ratio)과 함께 순서(pathway_r)에도
+        # 무슨 일이 일어나는지 매번 같이 나온다 — 둘 중 하나만 보고하면 안 된다.
+        "MOCHI-knockout=/home/dyan/nmf/mochi_code/results/current/gate_nmf_tf_h/nmf_tf_best.ckpt=gamma0",
         "MOCHI-nogan=/home/dyan/nmf/mochi_code/results/current/gate_ablate_nogan/nmf_tf_best.ckpt",
         "MOCHI-notf=/home/dyan/nmf/mochi_code/results/current/gate_ablate_mean/nmf_tf_best.ckpt",
         "MOCHI-nonmf=/home/dyan/nmf/mochi_code/results/current/gate_ablate_nonmf/nmf_tf_best.ckpt",
