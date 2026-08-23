@@ -1,8 +1,8 @@
-# MOCHI: 적대적 NMF-Transformer를 이용한 다중오믹스 수렴형 하이브리드 보정기
+# MOCHI: NMF-Transformer를 이용한 다중오믹스 수렴형 하이브리드 보정기
 
-**영문 제목.** MOCHI: Multi-Omics Convergent Hybrid Imputer via an Adversarial NMF-Transformer
+**영문 제목.** MOCHI: Multi-Omics Convergent Hybrid Imputer via an NMF-Transformer
 
-**Running title.** MOCHI: adversarial NMF-Transformer imputation
+**Running title.** MOCHI: NMF-Transformer imputation
 
 **투고 저널.** *Bioinformatics* (Oxford University Press)
 
@@ -14,7 +14,7 @@
 
 ### Motivation
 
-다중오믹스 분석은 같은 표본에서 전사체, 후성유전체, 단백질체를 함께 볼 때 질병 기전을 더 분명하게 드러낸다. 실제 코호트에서는 두 종류의 결측이 섞여 있다. 측정값의 일부가 빠지는 칸 결측과, 한 오믹스 전체가 수집되지 않은 블록 결측이다. 기존 번역기는 대개 한 소스에서 한 타깃을 만들고, 칸 결측 모형은 남은 관측만 메운다. 둘을 한 네트워크에서 다루려면 자기 표현을 지키면서도 다른 오믹스의 정보를 끌어올 수 있어야 한다. 본 연구는 OmicsNMF가 보인 생성적 적대 학습과 비음수 행렬 분해(NMF)의 결합을, 세 오믹스가 서로를 보정하는 구조로 확장한다.
+다중오믹스 분석은 같은 표본에서 전사체, 후성유전체, 단백질체를 함께 볼 때 질병 기전을 더 분명하게 드러낸다. 실제 코호트에서는 두 종류의 결측이 섞여 있다. 측정값의 일부가 빠지는 칸 결측과, 한 오믹스 전체가 수집되지 않은 블록 결측이다. 기존 번역기는 대개 한 소스에서 한 타깃을 만들고, 칸 결측 모형은 남은 관측만 메운다. 둘을 한 네트워크에서 다루려면 자기 표현을 지키면서도 다른 오믹스의 정보를 끌어올 수 있어야 한다. 본 연구는 고정 NMF 성분을 디코더 랭크 상한이 아니라 게이트된 잔차로 얹는 NMF-Transformer로, 칸 결측과 블록 결측을 한 모형에서 다룬다.
 
 ### Results
 
@@ -466,4 +466,5 @@ Zhou, X. et al. (2020) TDimpute. *관련 원논문, 투고 전 서지 확정.*
 - 그림 1은 `paper/figures/plot_pathway_knockout.py`로 그린다. 원자료는 `make_source_data.py`가 만든다. 커밋된 `source_pathway_knockout.csv`에는 Panel B의 녹아웃 \(r\)이 아직 없다. 옛 CSV로 그림을 돌리면 재생성 안내와 함께 멈춘다. 자리표시 값을 넣지 않는다.
 - 그림 2는 `paper/figures/plot_architecture.py`다.
 - 2026-08-23 패치 A/B/C (`mochi_ABC.patch`): γ 전용 학습률·softplus 비음수, NMF 손실 W에 ReLU, 자기정보 베이스라인 4종. `tests/test_patches.py` 통과. 표 1–11과 그림 1은 패치 전 체크포인트 수치이므로, BRCA/LUAD/KIRC 재학습 후 갈아끼워야 한다.
-- 2026-08-23 BRCA `--gamma_nonneg` 재학습 평가: 실효 γ 메틸화 0.498 > RNA 0.388 > 단백질 0.317. 표 10–11 BRCA를 `bio_brca`(MIMIR 포함) / `abl_brca`로 갈아끼움. 경로 SD: MIMIR 0.864, MOCHI 0.850, Ridge 0.755. 녹아웃 0.850→0.309(−64%), r 0.676→0.579. RNA/메틸 z-RMSE +0.093/+0.070, 단백질 −0.007. 패치 전의 진폭 1등(0.973 vs MIMIR 0.882)은 γ 학습 후 사라졌다. 인과는 녹아웃에 남는다. LUAD·KIRC는 패치 전 숫자. Ŵ는 잔차의 자유 계수. 닫힌 형태 분산 보정은 과분산이 관측되어 폐기.
+- 2026-08-23 제목에서 Adversarial을 뺐다. MOCHI: Multi-Omics Convergent Hybrid Imputer via an NMF-Transformer. 적대항은 목적함수에 남을 수 있으나 이름·주장의 주인공이 아니다. 다음 방향은 GAN 대체가 아니라 학습된 γ와 저랭크 녹아웃이다.
+- 2026-08-23 LUAD `--gamma_nonneg` 학습 완료(epoch 94, val 블록 z-RMSE 0.921). 실효 γ 단백질 0.320, RNA 0.385, 메틸화 0.481 — BRCA와 같은 순서.
