@@ -10,4 +10,4 @@ tensorboard>=2.14.0
 numpy>=1.24.0
 
 # 개선된 코드를 위한 추가 패키지
-torch-linalg>=0.1.0  # 행렬 연산 가속
+# torch-linalg>=0.1.0  # PyPI에 없는 패키지이며 활성 코드에서 쓰지 않음 (torch.linalg 내장 사용)
