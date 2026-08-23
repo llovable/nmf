@@ -155,7 +155,9 @@ def main():
     pm["b"] = pm["id"].str.split(".").str[0]
     ens2sym = pm.drop_duplicates("b").set_index("b")["gene"]
     rna_sym = pd.Index([ens2sym.get(i.split(".")[0], None) for i in feat["rna"]])
-    gene_index = {g: i for i, g in enumerate(rna_sym) if g is not None}
+    # probeMap에 심볼이 비어 있거나 NaN이면 pandas가 float로 넣는다.
+    # 그대로 gene_index에 들어가면 성분 상위 유전자 정렬이 str/float 혼합으로 죽는다.
+    gene_index = {g: i for i, g in enumerate(rna_sym) if isinstance(g, str) and g}
     sets = load_gmt(args.gmt, set(gene_index))
     print(f"device={device} n_test={len(test)}  매핑 유전자={len(gene_index)}  경로={len(sets)}")
 
@@ -333,7 +335,14 @@ def main():
         rows.append(rec)
         print(f"[methyl] {name} done")
 
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows)
+    df.to_csv(out / "biology.tsv", sep="\t", index=False, float_format="%.4f")
+    print(f"saved {out / 'biology.tsv'}")
+
     # ---- 고정 NMF 성분의 경로 과대표현 ----
+    # 표 10의 숫자는 위에서 이미 썼다. 성분 과대표현이 죽어도 본문 지표는 남긴다.
     comp_rows = []
     mochi = models.get("MOCHI")
     if mochi is not None:
@@ -342,7 +351,8 @@ def main():
         M = len(universe)
         for c in range(H.shape[0]):
             order = np.argsort(-H[c])
-            top = [rna_sym[i] for i in order if rna_sym[i] in universe][:TOP_GENES]
+            top = [rna_sym[i] for i in order if isinstance(rna_sym[i], str)
+                   and rna_sym[i] in universe][:TOP_GENES]
             top = set(top)
             best = None
             for pw, genes in sets.items():
@@ -352,18 +362,15 @@ def main():
                 p = hypergeom.sf(k - 1, M, len(genes), len(top))
                 if best is None or p < best[1]:
                     best = (pw, float(p), k)
+            names = sorted(str(x) for x in top)
             comp_rows.append({
                 "component": c,
-                "top_genes": ",".join(sorted(top)[:8]),
+                "top_genes": ",".join(names[:8]),
                 "pathway": best[0] if best else "",
                 "p": best[1] if best else np.nan,
                 "overlap": best[2] if best else 0,
             })
 
-    out = Path(args.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(rows)
-    df.to_csv(out / "biology.tsv", sep="\t", index=False, float_format="%.4f")
     if comp_rows:
         cdf = pd.DataFrame(comp_rows).sort_values("p")
         cdf.to_csv(out / "nmf_components.tsv", sep="\t", index=False, float_format="%.3g")
