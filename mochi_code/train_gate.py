@@ -42,9 +42,22 @@ def build_nmf_basis(X, k=20, ridge=1e-3, device="cpu"):
     return {"H": Ht, "HHt_inv": HHt_inv, "shift": shift_t, "w_mean": w_mean}
 
 
-def nmf_recon_loss(Y, basis):
+def nmf_coefficients(Y, basis, nonneg=True):
+    """예측 Y의 NMF 계수 W. FrozenNMF.encode와 **같은** 정의를 쓴다.
+
+    nonneg=False면 능형 최소제곱 해를 그대로 쓰므로 W에 음수가 섞이고,
+    이 경우 아래 손실은 NMF가 아니라 span(H)로의 선형 사영(=저랭크 부분공간
+    정규화)이 된다. 비음수성이 NMF 해석의 근거이므로 기본값은 True다.
+    """
     Ys = torch.clamp(Y + basis["shift"], min=1e-8)
     W = (Ys @ basis["H"].T) @ basis["HHt_inv"]
+    if nonneg:
+        W = torch.nn.functional.relu(W)
+    return W, Ys
+
+
+def nmf_recon_loss(Y, basis, nonneg=True):
+    W, Ys = nmf_coefficients(Y, basis, nonneg=nonneg)
     rec = W @ basis["H"]
     return torch.nn.functional.mse_loss(rec, Ys)
 

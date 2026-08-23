@@ -58,7 +58,7 @@ def _conds(xs, tgt):
 def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 mask_p=0.15, drop_p=0.4, lambda_loo=1.5, lambda_con=0.2,
                 lambda_nmf=0.1, lambda_w=0.3, alpha=0.5, gan_to_mse=0.1,
-                n_critic=1, lambda_gp=10.0):
+                n_critic=1, lambda_gp=10.0, nmf_nonneg=True):
     model.train()
     for D in critics.values():
         D.train()
@@ -141,11 +141,11 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
         for m, pred in own.items():
             keep = present[m]
             if keep.any():
-                nloss = nloss + nmf_recon_loss(pred[keep], bases[m])
+                nloss = nloss + nmf_recon_loss(pred[keep], bases[m], nonneg=nmf_nonneg)
                 n_n += 1
         for tgt, (hat, can) in hats.items():
             if can.any():
-                nloss = nloss + nmf_recon_loss(hat[can], bases[tgt])
+                nloss = nloss + nmf_recon_loss(hat[can], bases[tgt], nonneg=nmf_nonneg)
                 n_n += 1
         nloss = nloss / max(n_n, 1) if n_n else nloss
 
@@ -181,12 +181,21 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
 
 @torch.no_grad()
 def block_zrmse(model, ds, device):
+    """블록 결측 val 지표. 원래 결측(NaN→0으로 채운 칸)은 채점에서 뺀다.
+
+    예전 판은 전체 칸을 평균해서, NaN을 0으로 채운 자리까지 '맞춘 것'으로
+    세었다. 조기 종료 기준이 결측률에 따라 낙관적으로 치우친다.
+    """
     tabs = {m: getattr(ds, {"protein": "prot_f", "rna": "rna_f", "methyl": "methy_f"}[m]) for m in MODS}
+    obs = {m: getattr(ds, {"protein": "m_prot", "rna": "m_rna", "methyl": "m_methy"}[m]) < 0.5
+           for m in MODS}
     per = {}
     for tgt in MODS:
         hat = predict_nmf_tf(model, tabs, device, missing=tgt)
-        per[tgt] = float(np.sqrt(np.mean((tabs[tgt] - hat[tgt]) ** 2)))
-    per["avg"] = float(np.mean([per[t] for t in MODS]))
+        sel = obs[tgt]
+        per[tgt] = float(np.sqrt(np.mean((tabs[tgt][sel] - hat[tgt][sel]) ** 2))) if sel.any() \
+            else float("nan")
+    per["avg"] = float(np.nanmean([per[t] for t in MODS]))
     return per
 
 
@@ -208,6 +217,17 @@ def main():
     ap.add_argument("--no_lowrank", action="store_true",
                     help="저랭크 NMF 잔차 경로와 계수 보조 손실을 끈다")
     ap.add_argument("--gamma_init", type=float, default=0.3)
+    ap.add_argument("--gamma_lr", type=float, default=1e-2,
+                    help="저랭크 게이트 gamma 전용 학습률. 본체 lr(3e-4)로는 스칼라 3개가 "
+                         "학습 중에 초기값에서 거의 움직이지 못한다")
+    ap.add_argument("--gamma_nonneg", action="store_true",
+                    help="gamma = softplus(raw)로 두어 음수 게이트를 막는다. "
+                         "비음수 성분 해석을 유지하려면 켠다")
+    ap.add_argument("--nmf_nonneg", dest="nmf_nonneg", action="store_true", default=True,
+                    help="NMF 정규화 손실의 계수 W에 ReLU를 적용한다 (FrozenNMF.encode와 동일 정의)")
+    ap.add_argument("--no_nmf_nonneg", dest="nmf_nonneg", action="store_false",
+                    help="예전 동작: W에 ReLU를 안 쓴다. 이때 이 항은 NMF가 아니라 "
+                         "span(H)로의 선형 사영이다")
     ap.add_argument("--lambda_w", type=float, default=0.3)
     ap.add_argument("--n_train", type=int, default=0,
                     help="0보다 크면 train을 그만큼만 부분표집한다 (소표본 실험용)")
@@ -249,6 +269,7 @@ def main():
         use_transformer=not args.no_transformer,
         use_lowrank=not args.no_lowrank,
         gamma_init=args.gamma_init,
+        gamma_nonneg=args.gamma_nonneg,
     ).to(device)
     for m in MODS:
         model.encoders[m].load_state_dict(encs[m].state_dict())
@@ -259,18 +280,33 @@ def main():
         "rna": ConditionalCritic(dims["rna"], dims["protein"] + dims["methyl"]).to(device),
         "methyl": ConditionalCritic(dims["methyl"], dims["rna"] + dims["protein"]).to(device),
     }
-    opt_g = Adam(model.parameters(), lr=3e-4, weight_decay=1e-5)
+    # gamma는 스칼라 3개다. 109만 개 파라미터와 같은 param group에 lr=3e-4로 두면
+    # Adam의 스텝당 이동 상한이 대략 lr이라 학습 내내 초기값 근처에 머문다
+    # (실측: 40 epoch에서 |Δgamma| < 0.03, gamma_init을 바꾸면 결과가 따라 바뀜).
+    # 전용 param group으로 분리해 실제로 학습되게 한다. weight_decay는 걸지 않는다.
+    gamma_params = [model.gamma]
+    gamma_ids = {id(p) for p in gamma_params}
+    body_params = [p for p in model.parameters() if id(p) not in gamma_ids]
+    opt_g = Adam(
+        [
+            {"params": body_params, "lr": 3e-4, "weight_decay": 1e-5},
+            {"params": gamma_params, "lr": args.gamma_lr, "weight_decay": 0.0},
+        ]
+    )
     opt_d = Adam([p for D in critics.values() for p in D.parameters()], lr=1e-4, betas=(0.5, 0.9))
 
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     print("=== phase2 AE-hidden LOO + NMF tokens + WGAN ===")
+    print(f"gamma: init={args.gamma_init} lr={args.gamma_lr} nonneg={args.gamma_nonneg}  "
+          f"nmf_loss_nonneg={args.nmf_nonneg}")
     best, pat = float("inf"), 0
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"params G={n_params:,}")
     for ep in range(1, args.epochs2 + 1):
         tr = train_epoch(model, critics, bases, train_loader, opt_g, opt_d, device,
-                         gan_to_mse=args.gan_to_mse, lambda_w=args.lambda_w)
+                         gan_to_mse=args.gan_to_mse, lambda_w=args.lambda_w,
+                         nmf_nonneg=args.nmf_nonneg)
         met = block_zrmse(model, val_ds, device)
         mark = ""
         if met["avg"] < best:
@@ -281,11 +317,18 @@ def main():
                 "use_nmf_tokens": not args.no_nmf_tokens,
                 "use_transformer": not args.no_transformer,
                 "use_lowrank": not args.no_lowrank,
+                # 재현에 필요한 설정을 전부 남긴다. 논문 표에 그대로 옮길 수 있어야 한다.
+                "gamma_nonneg": args.gamma_nonneg,
+                "gamma_init": args.gamma_init,
+                "gamma_lr": args.gamma_lr,
+                "nmf_nonneg": args.nmf_nonneg,
+                "seed": args.seed,
+                "n_train": len(train_ds),
                 "epoch": ep, "val": met,
             }, save_dir / "nmf_tf_best.ckpt")
         else:
             pat += 1
-        gam = ",".join(f"{float(g):.2f}" for g in model.gamma.detach().cpu())
+        gam = ",".join(f"{float(g):.3f}" for g in model.effective_gamma().cpu())
         print(f"ep {ep:03d} tot={tr['total']:.4f} recon={tr['recon']:.4f} "
               f"loo={tr['loo']:.4f} con={tr['con']:.4f} nmf={tr['nmf']:.4f} "
               f"w={tr['w']:.4f} wgan={tr['wgan']:.4f} gamma={gam}  "

@@ -25,6 +25,11 @@ K_DEFAULT = 20
 D_MODEL = 128
 
 
+def _inv_softplus(y: float) -> float:
+    """softplus(x) = y 를 만족하는 x. gamma_nonneg일 때 초기값을 맞추는 데 쓴다."""
+    return float(np.log(np.expm1(y)))
+
+
 class FrozenNMF(nn.Module):
     """sklearn NMF 사전. W = ReLU((x+shift) H⁺)."""
 
@@ -145,7 +150,7 @@ class NMFTransformerMOCHI(nn.Module):
     def __init__(self, dims: Dict[str, int], tokenizers: Dict[str, FrozenNMF],
                  k=K_DEFAULT, d_model=D_MODEL, n_heads=4, n_layers=2,
                  use_nmf_tokens=True, use_transformer=True,
-                 use_lowrank=True, gamma_init=0.3):
+                 use_lowrank=True, gamma_init=0.3, gamma_nonneg=False):
         super().__init__()
         self.mods = tuple(MODS)
         self.k = k
@@ -153,6 +158,7 @@ class NMFTransformerMOCHI(nn.Module):
         self.use_nmf_tokens = use_nmf_tokens
         self.use_transformer = use_transformer
         self.use_lowrank = use_lowrank
+        self.gamma_nonneg = bool(gamma_nonneg)
         self.encoders = nn.ModuleDict({m: nn.Linear(dims[m], HIDDEN[m]) for m in self.mods})
         self.decoders = nn.ModuleDict({m: nn.Linear(HIDDEN[m], dims[m]) for m in self.mods})
         self.tokenizers = nn.ModuleDict(tokenizers)
@@ -164,14 +170,41 @@ class NMFTransformerMOCHI(nn.Module):
             nn.init.zeros_(self.w_head[m].weight)
             with torch.no_grad():
                 self.w_head[m].bias.copy_(self.tokenizers[m].w_mean)
-        self.gamma = nn.Parameter(torch.full((len(self.mods),), float(gamma_init)))
+        # gamma는 저랭크 잔차의 게이트다. 파라미터 이름은 예전 체크포인트와 맞춘다.
+        # gamma_nonneg=True면 이 값은 raw이고 실효 게이트는 softplus(raw) ≥ 0 이다.
+        raw_init = float(gamma_init)
+        if self.gamma_nonneg:
+            if float(gamma_init) < 0.05:
+                # softplus는 raw가 크게 음수인 구간에서 기울기가 0에 수렴한다.
+                # gamma_init≈0으로 시작하면 raw≈-9가 되어 게이트가 그 자리에 갇힌다.
+                # (실측: gamma_init=0, gamma_nonneg=True로 40 epoch 학습 시 0.000 고정)
+                raise ValueError(
+                    f"gamma_nonneg=True에서는 gamma_init >= 0.05 이어야 합니다 "
+                    f"(받은 값 {gamma_init}). 저랭크 경로를 끄려면 use_lowrank=False를 쓰세요.")
+            raw_init = _inv_softplus(float(gamma_init))
+        self.gamma = nn.Parameter(torch.full((len(self.mods),), raw_init))
         self.fuse = NMFTransformer(
             k=k, d_model=d_model, n_heads=n_heads, n_layers=n_layers,
             use_nmf_tokens=use_nmf_tokens, use_transformer=use_transformer,
         )
 
     def _gamma(self, target: str) -> torch.Tensor:
-        return self.gamma[self.mods.index(target)]
+        g = self.gamma[self.mods.index(target)]
+        return F.softplus(g) if self.gamma_nonneg else g
+
+    def effective_gamma(self) -> torch.Tensor:
+        """로그·보고용 실효 게이트 값. gamma_nonneg 여부와 무관하게 같은 의미."""
+        with torch.no_grad():
+            return F.softplus(self.gamma) if self.gamma_nonneg else self.gamma.clone()
+
+    def set_lowrank(self, on: bool):
+        """저랭크 NMF 잔차 경로를 켜고 끈다.
+
+        gamma를 0으로 덮어쓰는 방식은 gamma_nonneg일 때 softplus(0)=0.693이 되어
+        녹아웃이 아니라 게이트를 키우는 결과가 된다. 녹아웃은 반드시 이 함수를 쓴다.
+        """
+        self.use_lowrank = bool(on)
+        return self
 
     def predict_W(self, z: torch.Tensor, target: str) -> torch.Tensor:
         """융합 좌표에서 타깃 NMF 계수. 계수는 비음수여야 한다."""
@@ -293,6 +326,8 @@ def load_nmf_tf(path, device):
         use_nmf_tokens=ck.get("use_nmf_tokens", True),
         use_transformer=ck.get("use_transformer", True),
         use_lowrank=ck.get("use_lowrank", "gamma" in sd),
+        # 예전 체크포인트에는 이 키가 없다. 없으면 무제약 gamma로 읽어 그대로 재현된다.
+        gamma_nonneg=ck.get("gamma_nonneg", False),
     ).to(device)
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if unexpected:

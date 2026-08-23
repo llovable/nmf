@@ -195,9 +195,10 @@ def main():
             continue
         mdl = load_nmf_tf(path, device)
         # 세 번째 칸이 gamma0이면 추론 시 저랭크 잔차를 꺼서 기여도를 녹아웃한다.
+        # gamma.zero_()는 gamma_nonneg 모델에서 softplus(0)=0.693이 되어 녹아웃이
+        # 아니라 게이트를 키운다. 반드시 set_lowrank(False)를 쓴다.
         if len(parts) > 2 and parts[2] == "gamma0":
-            with torch.no_grad():
-                mdl.gamma.zero_()
+            mdl.set_lowrank(False)
         models[name] = mdl
 
     mimir = mimir_mv = None
