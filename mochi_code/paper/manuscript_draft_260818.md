@@ -18,7 +18,7 @@
 
 ### Results
 
-TCGA BRCA 원발 종양 631명과 LUAD 319명으로 칸·블록 결측과 저랭크 잔차 녹아웃을 평가하고, 같은 규칙의 KIRC 원발 종양 291명에서 녹아웃을 재현하였다. 보고 모형 MOCHI는 오믹스별 선형 오토인코더의 은닉 표현을 주 경로로 두고, 학습 집합에서만 맞춘 고정 NMF 계수를 Transformer의 보조 토큰으로 넣는 동시에 코호트 평균에서의 계수 편차를 저랭크 잔차로 디코더 출력에 더하며, 조건부 Wasserstein GAN을 약하게 곁들인다. 칸 결측(MCAR·MNAR 30%)에서 BRCA 검사 집합 평균 z-RMSE는 각각 0.683, 0.676로, 순수 번역기(Ridge 2→1 0.834)를 뚜렷이 앞섰고 공유 잠재공간 오토인코더(MIMIR 0.645 / 0.651)에는 미치지 못했다. 같은 마스크에서 타깃 자기 정보를 쓰는 Ridge-self는 0.715, softImpute-concat은 0.717로 번역기와 MOCHI 사이에 있다. 블록 결측에서는 MIMIR(0.724)과 Ridge 2→1(0.818)이 재구성에서 앞섰고, MOCHI는 0.860이었다. 패치 전 LUAD 표에서도 칸 MCAR 30%는 MIMIR 0.651, MOCHI 0.697, Ridge 2→1 0.851이고 블록 평균은 0.719, 0.878, 0.836으로 순위가 같았다. 그 표는 같은 분할 MIMIR·보고 모형으로 다시 잰 뒤 갈아끼운다. 번역기 비교에서는 RNA 복원에 두 번째 오믹스를 쓰는 2→1이 1→1보다 나았으나, 단백질은 RNA만 쓰는 편이 유리하였다. 구성 요소를 끈 실험에서 칸 결측의 이득은 거의 자기 은닉 가중에 있었고, 표준 결측률의 재구성 오차만 보면 Transformer와 적대항의 기여는 없었다. 그러나 조건을 바꾸면 부호가 달라진다. Transformer는 결측률 70–90% 구간에서 이득으로 돌아섰고(MCAR 90%에서 0.914 대 0.927), 적대항과 NMF 토큰은 오차가 아니라 분포에서 값을 냈다. 적대항을 끄면 특징별 표준편차 비가 0.754에서 0.692로, NMF 토큰을 빼면 0.548까지 떨어진다. Ridge 2→1은 z-RMSE가 더 낮으면서도 표준편차 비는 0.604로 더 심하게 수축한다. 한편 선행 연구가 쓰는 하위 과제 AUROC(ER, HER2, PAM50, 병기)는 방법 간 격차가 부트스트랩 신뢰구간보다 작았고, 세 과제에서 대치값이 실제 값보다 높은 AUROC를 냈다. 생물학적 보존을 다섯 축으로 다시 재었을 때도 경로 상관, 환자 간 상관, kNN 겹침, 차등 발현 t 상관은 재구성 오차의 순위를 재현한다. 그 순위를 Ridge 대비로 깨는 축은 경로 활성의 진폭이다. \(\gamma\)가 고정된 패치 전 체크포인트에서만 BRCA에서 MOCHI가 0.973으로 MIMIR(0.882)을 이겼고, \(\gamma\)를 학습시킨 뒤에는 MIMIR 0.864, MOCHI 0.850, Ridge 0.755이다. 같은 프로토콜을 LUAD·KIRC에 적용하면 진폭 순위는 암종마다 갈린다. LUAD는 MOCHI 0.845가 MIMIR 0.817을 이기고, KIRC는 MIMIR 0.961이 MOCHI 0.672를 크게 앞선다. 실효 \(\gamma\)(단백질, RNA, 메틸화)는 BRCA 0.317 / 0.388 / 0.498, LUAD 0.320 / 0.385 / 0.481이고, KIRC는 0.392 / 0.297 / 0.502로 RNA와 단백질이 바뀐다. 세 암종에서 공통인 것은 메틸화가 가장 크다는 점뿐이다. 같은 가중치에서 저랭크 잔차만 끄면 BRCA 진폭이 0.309로 64% 줄고 경로 상관도 0.676에서 0.579로 같이 내려가, 그 진폭이 NMF 성분 항에서 나옴을 확인하였다. LUAD는 진폭 0.845→0.486(−42%), \(r\) 0.697→0.661이고, KIRC는 진폭 0.672→0.375(−44%), \(r\) 0.592→0.510이다. BRCA·LUAD에서 RNA·메틸화 블록 오차는 함께 나빠지고 단백질만 소폭 좋아지며, KIRC 단백질 Δ는 +0.001이다.
+TCGA BRCA 원발 종양 631명과 LUAD 319명으로 칸·블록 결측과 저랭크 잔차 녹아웃을 평가하고, 같은 규칙의 KIRC 원발 종양 291명에서 녹아웃을 재현하였다. 보고 모형 MOCHI는 오믹스별 선형 오토인코더의 은닉 표현을 주 경로로 두고, 학습 집합에서만 맞춘 고정 NMF 계수를 Transformer의 보조 토큰으로 넣는 동시에 코호트 평균에서의 계수 편차를 저랭크 잔차로 디코더 출력에 더하며, 조건부 Wasserstein GAN을 약하게 곁들인다. 칸 결측(MCAR·MNAR 30%)에서 BRCA 검사 집합 평균 z-RMSE는 각각 0.683, 0.676로, 순수 번역기(Ridge 2→1 0.834)를 뚜렷이 앞섰고 공유 잠재공간 오토인코더(MIMIR 0.645 / 0.651)에는 미치지 못했다. 같은 마스크에서 타깃 자기 정보를 쓰는 Ridge-self는 0.715, softImpute-concat은 0.717로 번역기와 MOCHI 사이에 있다. 블록 결측에서는 MIMIR(0.724)과 Ridge 2→1(0.818)이 재구성에서 앞섰고, MOCHI는 0.860이었다. LUAD에서도 칸 MCAR 30%는 MIMIR 0.625, MOCHI 0.693, Ridge-self 0.727, Ridge 2→1 0.851이고, 블록 평균은 MIMIR 0.690, Ridge 2→1 0.836, MOCHI 0.872로 칸·블록 순위가 BRCA와 같다. 번역기 비교에서는 RNA 복원에 두 번째 오믹스를 쓰는 2→1이 1→1보다 나았으나, 단백질은 RNA만 쓰는 편이 유리하였다. 구성 요소를 끈 실험에서 칸 결측의 이득은 거의 자기 은닉 가중에 있었고, 표준 결측률의 재구성 오차만 보면 Transformer와 적대항의 기여는 없었다. 그러나 조건을 바꾸면 부호가 달라진다. Transformer는 결측률 70–90% 구간에서 이득으로 돌아섰고(MCAR 90%에서 0.914 대 0.927), 적대항과 NMF 토큰은 오차가 아니라 분포에서 값을 냈다. 적대항을 끄면 특징별 표준편차 비가 0.754에서 0.692로, NMF 토큰을 빼면 0.548까지 떨어진다. Ridge 2→1은 z-RMSE가 더 낮으면서도 표준편차 비는 0.604로 더 심하게 수축한다. 한편 선행 연구가 쓰는 하위 과제 AUROC(ER, HER2, PAM50, 병기)는 방법 간 격차가 부트스트랩 신뢰구간보다 작았고, 세 과제에서 대치값이 실제 값보다 높은 AUROC를 냈다. 생물학적 보존을 다섯 축으로 다시 재었을 때도 경로 상관, 환자 간 상관, kNN 겹침, 차등 발현 t 상관은 재구성 오차의 순위를 재현한다. 그 순위를 Ridge 대비로 깨는 축은 경로 활성의 진폭이다. \(\gamma\)가 고정된 패치 전 체크포인트에서만 BRCA에서 MOCHI가 0.973으로 MIMIR(0.882)을 이겼고, \(\gamma\)를 학습시킨 뒤에는 MIMIR 0.864, MOCHI 0.850, Ridge 0.755이다. 같은 프로토콜을 LUAD·KIRC에 적용하면 진폭 순위는 암종마다 갈린다. LUAD는 MOCHI 0.845가 MIMIR 0.817을 이기고, KIRC는 MIMIR 0.961이 MOCHI 0.672를 크게 앞선다. 실효 \(\gamma\)(단백질, RNA, 메틸화)는 BRCA 0.317 / 0.388 / 0.498, LUAD 0.320 / 0.385 / 0.481이고, KIRC는 0.392 / 0.297 / 0.502로 RNA와 단백질이 바뀐다. 세 암종에서 공통인 것은 메틸화가 가장 크다는 점뿐이다. 같은 가중치에서 저랭크 잔차만 끄면 BRCA 진폭이 0.309로 64% 줄고 경로 상관도 0.676에서 0.579로 같이 내려가, 그 진폭이 NMF 성분 항에서 나옴을 확인하였다. LUAD는 진폭 0.845→0.486(−42%), \(r\) 0.697→0.661이고, KIRC는 진폭 0.672→0.375(−44%), \(r\) 0.592→0.510이다. BRCA·LUAD에서 RNA·메틸화 블록 오차는 함께 나빠지고 단백질만 소폭 좋아지며, KIRC 단백질 Δ는 +0.001이다.
 
 ### Availability and implementation
 
@@ -195,7 +195,7 @@ MNAR 30%에서도 윗줄의 순서는 같다. MIMIR 0.651, MOCHI 0.676, concat 0
 
 ### 3.5. LUAD에서 순위가 반복된다
 
-BRCA에서 고른 하이퍼파라미터를 LUAD 319명(학습 223, 검증 47, 검사 49)에 그대로 옮겼다. 표 6의 칸·블록 숫자는 아직 패치 전 체크포인트다. `--gamma_nonneg` 재학습의 LUAD 녹아웃은 표 11에 있고, 같은 분할에서 다시 학습한 MIMIR의 생물학 비교는 표 10b다. 패치 전 표에서 MCAR 30%는 MIMIR 0.651, MOCHI 0.697, Ridge 2→1 0.851이었고 블록 평균은 0.719, 0.878, 0.836이었다. 칸에서 자기 표현 모형이 번역기를 이기고 블록에서 MIMIR이 1등인 순위는 BRCA와 같았다. 그 순위가 새 체크포인트에서도 같은지는 표 6을 다시 채운 뒤에 적는다.
+BRCA에서 고른 하이퍼파라미터를 LUAD 319명(학습 223, 검증 47, 검사 49)에 그대로 옮겼다. `--gamma_nonneg` 재학습과 같은 분할 MIMIR로 칸·블록을 다시 쟀다(표 6). MCAR 30%는 MIMIR 0.625, MOCHI 0.693, Ridge-self 0.727, softImpute-concat 0.769, Ridge 2→1 0.851이다. MNAR 30%도 같은 순서다(0.623 / 0.687 / 0.736 / 0.749 / 0.791). 블록 평균은 MIMIR 0.690, Ridge 2→1 0.836, MOCHI 0.872이다. 칸에서 자기 표현 모형이 번역기를 이기고 블록에서 MIMIR이 1등인 순위는 BRCA와 같다. concat 단백질 블록은 2.076으로 폭발하고, 오믹스별 KNN·softImpute는 열 평균으로 퇴화해 평균 대치와 같다. 녹아웃은 표 11, MIMIR 대비 생물학은 표 10b다.
 
 ### 3.6. 생존 예측은 이 분할에서 순위를 가리지 못한다
 
@@ -386,12 +386,14 @@ Zhou, X. et al. (2020) TDimpute. *관련 원논문, 투고 전 서지 확정.*
 | 은닉 평균만† | 있음 | 없음 | 0.1 | 10 | 0.674 | 0.689 | 0.831 |
 | NMF 토큰 없음† | 없음 | 있음 | 0.1 | 10 | 0.678 | 0.696 | 0.870 |
 
-**표 6.** TCGA-LUAD 검사 집합(49명). 패치 전 체크포인트. `--gamma_nonneg` MOCHI와 같은 분할 MIMIR로 다시 잰다. 녹아웃은 표 11.
+**표 6.** TCGA-LUAD 검사 집합(49명). `--gamma_nonneg` MOCHI와 같은 분할 MIMIR(`self_luad/eval_summary.tsv`). v5·shared는 스킵. 녹아웃은 표 11.
 
 | 방법 | MCAR 30% | MNAR 30% | 블록 RNA | 블록 메틸화 | 블록 단백질 | 블록 평균 |
 | --- | --- | --- | --- | --- | --- | --- |
-| MIMIR | 0.651 | 0.646 | 0.710 | 0.707 | 0.740 | 0.719 |
-| MOCHI | 0.697 | 0.707 | 0.877 | 0.826 | 0.931 | 0.878 |
+| MIMIR | 0.625 | 0.623 | 0.680 | 0.681 | 0.709 | 0.690 |
+| MOCHI | 0.693 | 0.687 | 0.863 | 0.808 | 0.947 | 0.872 |
+| Ridge-self | 0.727 | 0.736 | 0.936 | 0.937 | 0.949 | 0.941 |
+| softImpute-concat | 0.769 | 0.749 | 1.177 | 1.038 | 2.076 | 1.430 |
 | Ridge 2→1 | 0.851 | 0.791 | 0.822 | 0.774 | 0.911 | 0.836 |
 | Ridge 1→1 | 0.870 | 0.804 | 0.901 | 0.765 | 0.895 | 0.854 |
 | 평균 대치 | 1.008 | 0.944 | 1.046 | 0.982 | 1.008 | 1.012 |
@@ -480,14 +482,14 @@ Zhou, X. et al. (2020) TDimpute. *관련 원논문, 투고 전 서지 확정.*
 - 구초안 `manuscript_draft_ko.md`의 PAM50 38명 수치(Pearson 0.958, C-index 0.92 등)는 사용하지 않았다.
 - 재구성 1등을 MIMIR로 두었다. “GAN이 MIMIR보다 정확하다”는 문장은 넣지 않았다.
 - Mac 경로 `/Users/doyeon/Library/Mobile Documents/com~apple~CloudDocs/2. 가천대 연구/[유전체합성품질검증] MOCHI/manuscript_draft_260818.docx`는 이 서버에 없다. 변환 파일은 `mochi_code/paper/manuscript_draft_260818.docx`이다.
-- 표 5·6은 BRCA ablation과 LUAD 평가를 반영하였다.
+- 표 5는 BRCA ablation, 표 6은 LUAD `--gamma_nonneg` + 같은 분할 MIMIR(`self_luad`)이다.
 - 표 7·8·9는 각각 `eval_stress.py`(극단 결측·이중 블록·분포), `train_nmf_tf.py --n_train`(소표본 재학습), `eval_downstream.py`(하위 과제)로 만들었다. 원자료는 `results/current/gate_stress`, `gate_small_eval`, `gate_downstream2`에 있다.
 - 하위 과제 레이블은 UCSC Xena TCGA BRCA clinicalMatrix에서 가져왔다. PAM50은 RNA 유래이므로 ER·HER2·병기를 우선으로 읽는다.
 - 그림 1은 `paper/figures/plot_pathway_knockout.py`로 그린다. 원자료는 `make_source_data.py`가 만든다. 현재 CSV는 BRCA+LUAD+KIRC `--gamma_nonneg` 평가다. Panel A는 BRCA(MIMIR 있음). LUAD·KIRC MIMIR은 표 10b. 없는 값을 자리표시로 넣지 않는다.
 - 그림 2는 `paper/figures/plot_architecture.py`다.
-- 2026-08-23 패치 A/B/C (`mochi_ABC.patch`): γ 전용 학습률·softplus 비음수, NMF 손실 W에 ReLU, 자기정보 베이스라인 4종. `tests/test_patches.py` 통과. 표 2–3·10–11과 그림 1의 BRCA는 `--gamma_nonneg` 평가. 표 2의 v5·PIMMS·OmiTrans 등과 표 6–9는 패치 전이라 섞어 읽지 않는다. 표 10b의 LUAD·KIRC MIMIR은 패치 후 같은 분할 재학습.
+- 2026-08-23 패치 A/B/C (`mochi_ABC.patch`): γ 전용 학습률·softplus 비음수, NMF 손실 W에 ReLU, 자기정보 베이스라인 4종. `tests/test_patches.py` 통과. 표 2–3·6·10–11과 그림 1의 BRCA는 `--gamma_nonneg` 평가. 표 2의 v5·PIMMS·OmiTrans 등과 표 7–9는 패치 전이라 섞어 읽지 않는다. 표 10b의 LUAD·KIRC MIMIR은 패치 후 같은 분할 재학습.
 - 2026-08-23 제목에서 Adversarial을 뺐다. MOCHI: Multi-Omics Convergent Hybrid Imputer via an NMF-Transformer. 적대항은 목적함수에 남을 수 있으나 이름·주장의 주인공이 아니다. 다음 방향은 GAN 대체가 아니라 학습된 γ와 저랭크 녹아웃이다.
 - 2026-08-23 LUAD `--gamma_nonneg` 학습 완료(epoch 94, val 블록 z-RMSE 0.921). 실효 γ 단백질 0.320, RNA 0.385, 메틸화 0.481 — BRCA와 같은 순서. 녹아웃: 진폭 0.845→0.486(−42%), r 0.697→0.661, 블록 Δ RNA/메틸/단백질 +0.020/+0.040/−0.030.
 - 2026-08-23 KIRC `--gamma_nonneg` 학습(epoch 133, val 블록 z-RMSE 0.817)과 녹아웃 평가 완료. 실효 γ 단백질 0.392, RNA 0.297, 메틸화 0.502. 진폭 0.672→0.375(−44%), r 0.592→0.510, 블록 Δ RNA/메틸/단백질 +0.063/+0.112/+0.001. 메틸화는 세 암종에서 가장 크고, RNA vs 단백질 순서는 KIRC에서만 바뀐다. 단백질 오차 이득은 BRCA·LUAD에만 있다.
 - 2026-08-23 `eval_nmf_tf.py` `_is_ckpt` 가드 후 자기정보 평가 완료(EXIT 0). MCAR 30% avg: MIMIR 0.645, MOCHI 0.683, Ridge-self 0.715, softImpute-concat 0.717, Ridge 2→1 0.834, KNN 0.839, 오믹스별 softImpute 1.321. MCAR 50%에서는 concat 0.723이 MOCHI 0.742를 이김. 블록에서 KNN·오믹스별 softImpute는 평균 대치로 퇴화.
-- 2026-08-24 LUAD MIMIR val 3.6789, KIRC MIMIR val 3.8556. `eval_biology`에 MIMIR 포함. RNA 블록 진폭: LUAD MOCHI 0.845 > MIMIR 0.817, KIRC MIMIR 0.961 ≫ MOCHI 0.672. 표 10b 추가, 한계절의 “진폭 MIMIR은 BRCA만” 문장 삭제. Fig 1 재생성(Panel A는 BRCA). 표 6은 `self_luad/eval_summary.tsv`가 끝나면 갈아끼운다. `λ_W` 스윕은 그 다음.
+- 2026-08-24 LUAD MIMIR val 3.6789, KIRC MIMIR val 3.8556. `eval_biology`에 MIMIR 포함. RNA 블록 진폭: LUAD MOCHI 0.845 > MIMIR 0.817, KIRC MIMIR 0.961 ≫ MOCHI 0.672. 표 10b 추가, 한계절의 “진폭 MIMIR은 BRCA만” 문장 삭제. Fig 1 재생성(Panel A는 BRCA). 표 6은 `self_luad/eval_summary.tsv`(EXIT 0): MCAR 30% MIMIR 0.625, MOCHI 0.693, Ridge-self 0.727, concat 0.769, Ridge 2→1 0.851. 블록 평균 0.690 / 0.872 / 0.941 / 1.430 / 0.836. concat 단백질 블록 2.076. `λ_W` 스윕은 그 다음.
