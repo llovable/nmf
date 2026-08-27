@@ -58,7 +58,7 @@ def _conds(xs, tgt):
 def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 mask_p=0.15, drop_p=0.4, lambda_loo=1.5, lambda_con=0.2,
                 lambda_nmf=0.1, lambda_w=0.3, alpha=0.5, gan_to_mse=0.1,
-                n_critic=1, lambda_gp=10.0):
+                n_critic=1, lambda_gp=10.0, lambda_gamma=0.0):
     model.train()
     for D in critics.values():
         D.train()
@@ -163,8 +163,11 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 target = gan_to_mse * (rloss + lloss).detach().abs()
                 g_wgan = (target / g_wgan.detach().abs().clamp_min(1e-8)) * g_wgan
 
+        # 저랭크 세기 γ의 L1 벌점: 재구성을 못 줄이는 모달리티(예: 단백질)의
+        # γ를 0으로 눌러 해로운 저랭크 잔차를 자동으로 끈다.
+        gpen = lambda_gamma * model.gamma_l1() if lambda_gamma > 0 else rloss.new_zeros(())
         loss = (rloss + lambda_loo * lloss + lambda_con * closs
-                + lambda_nmf * nloss + lambda_w * wloss + g_wgan)
+                + lambda_nmf * nloss + lambda_w * wloss + g_wgan + gpen)
         opt_g.zero_grad()
         loss.backward()
         opt_g.step()
@@ -209,6 +212,11 @@ def main():
                     help="저랭크 NMF 잔차 경로와 계수 보조 손실을 끈다")
     ap.add_argument("--gamma_init", type=float, default=0.3)
     ap.add_argument("--lambda_w", type=float, default=0.3)
+    ap.add_argument("--lambda_gamma", type=float, default=0.02,
+                    help="저랭크 세기 γ의 L1 벌점. 도움이 안 되는 모달리티(예: 단백질) "
+                         "γ를 자동으로 0으로 끈다. 0이면 벌점 없음")
+    ap.add_argument("--lr_gamma", type=float, default=0.05,
+                    help="γ 전용 학습률. 스칼라 1개짜리 γ가 벌점·이득에 반응하도록 크게 준다")
     ap.add_argument("--n_train", type=int, default=0,
                     help="0보다 크면 train을 그만큼만 부분표집한다 (소표본 실험용)")
     ap.add_argument("--seed", type=int, default=0,
@@ -259,7 +267,14 @@ def main():
         "rna": ConditionalCritic(dims["rna"], dims["protein"] + dims["methyl"]).to(device),
         "methyl": ConditionalCritic(dims["methyl"], dims["rna"] + dims["protein"]).to(device),
     }
-    opt_g = Adam(model.parameters(), lr=3e-4, weight_decay=1e-5)
+    # γ는 모달리티당 스칼라 1개라 네트워크 가중치와 같은 작은 lr로는 거의 안 움직인다.
+    # 전용(더 큰) lr을 주어 L1 벌점·재구성 이득에 맞게 학습 예산 안에서 반응하게 한다.
+    gid = id(model.gamma)
+    other_params = [p for p in model.parameters() if id(p) != gid]
+    opt_g = Adam([
+        {"params": other_params, "lr": 3e-4, "weight_decay": 1e-5},
+        {"params": [model.gamma], "lr": args.lr_gamma, "weight_decay": 0.0},
+    ])
     opt_d = Adam([p for D in critics.values() for p in D.parameters()], lr=1e-4, betas=(0.5, 0.9))
 
     save_dir = Path(args.save_dir)
@@ -270,7 +285,8 @@ def main():
     print(f"params G={n_params:,}")
     for ep in range(1, args.epochs2 + 1):
         tr = train_epoch(model, critics, bases, train_loader, opt_g, opt_d, device,
-                         gan_to_mse=args.gan_to_mse, lambda_w=args.lambda_w)
+                         gan_to_mse=args.gan_to_mse, lambda_w=args.lambda_w,
+                         lambda_gamma=args.lambda_gamma)
         met = block_zrmse(model, val_ds, device)
         mark = ""
         if met["avg"] < best:
@@ -281,14 +297,16 @@ def main():
                 "use_nmf_tokens": not args.no_nmf_tokens,
                 "use_transformer": not args.no_transformer,
                 "use_lowrank": not args.no_lowrank,
+                "lambda_gamma": args.lambda_gamma,
+                "gamma_eff": [float(g) for g in model.effective_gamma().detach().cpu()],
                 "epoch": ep, "val": met,
             }, save_dir / "nmf_tf_best.ckpt")
         else:
             pat += 1
-        gam = ",".join(f"{float(g):.2f}" for g in model.gamma.detach().cpu())
+        gam = ",".join(f"{float(g):.2f}" for g in model.effective_gamma().detach().cpu())
         print(f"ep {ep:03d} tot={tr['total']:.4f} recon={tr['recon']:.4f} "
               f"loo={tr['loo']:.4f} con={tr['con']:.4f} nmf={tr['nmf']:.4f} "
-              f"w={tr['w']:.4f} wgan={tr['wgan']:.4f} gamma={gam}  "
+              f"w={tr['w']:.4f} wgan={tr['wgan']:.4f} geff={gam}  "
               f"val zRMSE avg={met['avg']:.4f} "
               f"P={met['protein']:.4f} R={met['rna']:.4f} M={met['methyl']:.4f}{mark}")
         if ep > 15 and pat >= args.patience:

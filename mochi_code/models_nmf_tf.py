@@ -164,14 +164,27 @@ class NMFTransformerMOCHI(nn.Module):
             nn.init.zeros_(self.w_head[m].weight)
             with torch.no_grad():
                 self.w_head[m].bias.copy_(self.tokenizers[m].w_mean)
-        self.gamma = nn.Parameter(torch.full((len(self.mods),), float(gamma_init)))
+        # γ는 비음수여야 하며(softplus), 학습 중 L1 벌점으로 도움이 안 되는
+        # 모달리티(예: 단백질)의 저랭크 잔차를 자동으로 0에 가깝게 눌러 끈다.
+        # raw 파라미터는 softplus(raw)=gamma_init 이 되도록 역변환해 초기화한다.
+        g0 = max(float(gamma_init), 1e-4)
+        raw0 = float(np.log(np.expm1(g0)))
+        self.gamma = nn.Parameter(torch.full((len(self.mods),), raw0))
         self.fuse = NMFTransformer(
             k=k, d_model=d_model, n_heads=n_heads, n_layers=n_layers,
             use_nmf_tokens=use_nmf_tokens, use_transformer=use_transformer,
         )
 
     def _gamma(self, target: str) -> torch.Tensor:
-        return self.gamma[self.mods.index(target)]
+        return F.softplus(self.gamma[self.mods.index(target)])
+
+    def effective_gamma(self) -> torch.Tensor:
+        """실효 γ = softplus(raw) (비음수). 로그·해석용."""
+        return F.softplus(self.gamma)
+
+    def gamma_l1(self) -> torch.Tensor:
+        """저랭크 세기의 L1 = Σ softplus(γ). 도움이 안 되는 경로를 0으로 눌러 끈다."""
+        return F.softplus(self.gamma).sum()
 
     def predict_W(self, z: torch.Tensor, target: str) -> torch.Tensor:
         """융합 좌표에서 타깃 NMF 계수. 계수는 비음수여야 한다."""
