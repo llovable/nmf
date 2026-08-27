@@ -1,10 +1,18 @@
-# Python >= 3.10 (Gradio 6 / Pillow 12 / Shapely 2)
-# 표준 라이브러리: json, glob, re, copy, shutil, os, sys, math, tkinter
+# Python >= 3.10
+# 이 검수 툴은 Gradio 4/5 API를 사용합니다.
+# (Blocks에 theme/css/title, Image.select, gr.SelectData, gr.TabItem)
+# Gradio 6은 theme/css가 launch()로 옮겨져 그대로 실행되지 않습니다.
+
+gradio>=4.44.0,<6.0.0
+Pillow>=10.0.0,<13.0.0
+numpy>=1.24.0,<3.0.0
+shapely>=2.0.0
+
+# 표준 라이브러리 (pip 불필요): json, glob, re, copy, shutil, os, sys, math, tkinter
 # tkinter는 pip 패키지가 아님. Linux에서는 별도로 설치:
 #   Ubuntu/Debian: sudo apt install python3-tk
 #   Fedora: sudo dnf install python3-tkinter
 
-gradio>=4.44.0
-Pillow>=10.0.0,<13.0.0
-numpy>=1.24.0,<3.0.0
-shapely>=2.0.0
+# Windows EXE 패키징 (sys.frozen / PyInstaller)
+pyinstaller>=6.0.0
+pyinstaller-hooks-contrib>=2024.0
