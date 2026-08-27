@@ -1,9 +1,15 @@
-# Python >= 3.10
+# Python 3.9: Gradio 4.44만 설치됨 (Gradio 5는 3.10+).
+# Python 3.10+: Gradio 5.x가 설치됨.
 # 이 검수 툴은 Gradio 4/5 API를 사용합니다.
 # (Blocks에 theme/css/title, Image.select, gr.SelectData, gr.TabItem)
 # Gradio 6은 theme/css가 launch()로 옮겨져 그대로 실행되지 않습니다.
+#
+# huggingface_hub 1.0은 HfFolder를 제거했습니다.
+# Gradio 4.x는 oauth.py에서 HfFolder를 import하므로 hub 1.x와 충돌합니다.
+# (Python 3.9에서 pip가 Gradio 4.44 + hub 1.x를 고르면 ImportError가 납니다)
 
 gradio>=4.44.0,<6.0.0
+huggingface_hub>=0.19.3,<1.0.0
 Pillow>=10.0.0,<13.0.0
 numpy>=1.24.0,<3.0.0
 shapely>=2.0.0
