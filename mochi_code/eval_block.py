@@ -15,11 +15,12 @@ import numpy as np
 import torch
 
 from models_nmf_tf import load_nmf_tf, predict_nmf_tf, MODS
+from models_shared import pick_device
 from train_gate import TripleSplitDataset
 
 data_dir = sys.argv[1]
 specs = sys.argv[2:]
-device = torch.device("cpu")
+device = pick_device()
 
 train = TripleSplitDataset(data_dir, "train")
 test = TripleSplitDataset(data_dir, "test", stats=train.stats)

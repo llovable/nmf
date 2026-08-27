@@ -22,6 +22,21 @@ MODS = ("protein", "rna", "methyl")
 HIDDEN = {"rna": 512, "protein": 128, "methyl": 256}
 
 
+def pick_device(gpu: int = 0) -> torch.device:
+    """CUDA > Apple MPS > CPU 순으로 사용 가능한 가속기를 고른다.
+
+    Apple Silicon(M1~) 맥북은 CUDA가 없고 MPS 백엔드로 GPU를 쓴다.
+    일부 연산(예: WGAN 그래디언트 패널티의 이중 역전파)이 MPS 미지원일 수 있으니
+    맥에서는 환경변수 PYTORCH_ENABLE_MPS_FALLBACK=1 로 CPU 폴백을 켜는 것을 권장한다.
+    """
+    if torch.cuda.is_available():
+        return torch.device(f"cuda:{gpu}")
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 class TokenFuse(nn.Module):
     """있는 모달리티 토큰만 보는 교차-어텐션. 출력은 샘플당 공유 z 하나."""
 

@@ -21,7 +21,7 @@ from models import ConditionalCritic
 from models_nmf_tf import (
     D_MODEL, K_DEFAULT, MODS, FrozenNMF, NMFTransformerMOCHI, predict_nmf_tf,
 )
-from models_shared import contrastive_loss, drop_modalities, mask_cells, mse_valid
+from models_shared import contrastive_loss, drop_modalities, mask_cells, mse_valid, pick_device
 from train_gate import TripleSplitDataset, build_nmf_basis, nmf_recon_loss
 from train_shared import pretrain_aes
 
@@ -228,7 +228,7 @@ def main():
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    device = pick_device(args.gpu)
     print(f"device={device} seed={args.seed}")
     train_ds = TripleSplitDataset(args.data_dir, "train")
     if 0 < args.n_train < len(train_ds):
