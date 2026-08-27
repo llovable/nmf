@@ -1,0 +1,10 @@
+# Python >= 3.10 (Gradio 6 / Pillow 12 / Shapely 2)
+# 표준 라이브러리: json, glob, re, copy, shutil, os, sys, math, tkinter
+# tkinter는 pip 패키지가 아님. Linux에서는 별도로 설치:
+#   Ubuntu/Debian: sudo apt install python3-tk
+#   Fedora: sudo dnf install python3-tkinter
+
+gradio>=4.44.0
+Pillow>=10.0.0,<13.0.0
+numpy>=1.24.0,<3.0.0
+shapely>=2.0.0
