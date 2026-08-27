@@ -10,6 +10,9 @@
 
 gradio>=4.44.0,<6.0.0
 huggingface_hub>=0.19.3,<1.0.0
+# Pydantic 2.11+ JSON 스키마는 additionalProperties: true(bool)를 씁니다.
+# Gradio 4.44(Python 3.9에서 설치됨)는 이를 dict로 처리하다 TypeError가 납니다.
+pydantic>=2.0,<2.11
 Pillow>=10.0.0,<13.0.0
 numpy>=1.24.0,<3.0.0
 shapely>=2.0.0
