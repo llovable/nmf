@@ -58,7 +58,7 @@ def _conds(xs, tgt):
 def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 mask_p=0.15, drop_p=0.4, lambda_loo=1.5, lambda_con=0.2,
                 lambda_nmf=0.1, lambda_w=0.3, alpha=0.5, gan_to_mse=0.1,
-                n_critic=1, lambda_gp=10.0, lambda_gamma=0.0):
+                n_critic=1, lambda_gp=10.0, lambda_gamma=0.0, gamma_weights=None):
     model.train()
     for D in critics.values():
         D.train()
@@ -165,7 +165,7 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
 
         # 저랭크 세기 γ의 L1 벌점: 재구성을 못 줄이는 모달리티(예: 단백질)의
         # γ를 0으로 눌러 해로운 저랭크 잔차를 자동으로 끈다.
-        gpen = lambda_gamma * model.gamma_l1() if lambda_gamma > 0 else rloss.new_zeros(())
+        gpen = lambda_gamma * model.gamma_l1(gamma_weights) if lambda_gamma > 0 else rloss.new_zeros(())
         loss = (rloss + lambda_loo * lloss + lambda_con * closs
                 + lambda_nmf * nloss + lambda_w * wloss + g_wgan + gpen)
         opt_g.zero_grad()
@@ -217,6 +217,9 @@ def main():
                          "γ를 자동으로 0으로 끈다. 0이면 벌점 없음")
     ap.add_argument("--lr_gamma", type=float, default=0.05,
                     help="γ 전용 학습률. 스칼라 1개짜리 γ가 벌점·이득에 반응하도록 크게 준다")
+    ap.add_argument("--gamma_penalty_mods", default="all",
+                    help="γ L1 벌점을 걸 모달리티 (콤마구분: protein,rna,methyl 중). "
+                         "'all'이면 균일. 예: 'protein'이면 단백질 저랭크만 표적으로 끈다")
     ap.add_argument("--n_train", type=int, default=0,
                     help="0보다 크면 train을 그만큼만 부분표집한다 (소표본 실험용)")
     ap.add_argument("--seed", type=int, default=0,
@@ -280,13 +283,22 @@ def main():
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     print("=== phase2 AE-hidden LOO + NMF tokens + WGAN ===")
+    if args.gamma_penalty_mods.strip().lower() == "all":
+        pen_mods = list(MODS)
+    else:
+        pen_mods = [m.strip() for m in args.gamma_penalty_mods.split(",") if m.strip()]
+    bad = [m for m in pen_mods if m not in MODS]
+    if bad:
+        raise SystemExit(f"--gamma_penalty_mods 값 오류: {bad} (가능: {MODS})")
+    gamma_weights = torch.tensor([1.0 if m in pen_mods else 0.0 for m in MODS], device=device)
+    print(f"gamma penalty: lambda={args.lambda_gamma} mods={pen_mods}")
     best, pat = float("inf"), 0
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"params G={n_params:,}")
     for ep in range(1, args.epochs2 + 1):
         tr = train_epoch(model, critics, bases, train_loader, opt_g, opt_d, device,
                          gan_to_mse=args.gan_to_mse, lambda_w=args.lambda_w,
-                         lambda_gamma=args.lambda_gamma)
+                         lambda_gamma=args.lambda_gamma, gamma_weights=gamma_weights)
         met = block_zrmse(model, val_ds, device)
         mark = ""
         if met["avg"] < best:
@@ -298,6 +310,7 @@ def main():
                 "use_transformer": not args.no_transformer,
                 "use_lowrank": not args.no_lowrank,
                 "lambda_gamma": args.lambda_gamma,
+                "gamma_penalty_mods": pen_mods,
                 "gamma_eff": [float(g) for g in model.effective_gamma().detach().cpu()],
                 "epoch": ep, "val": met,
             }, save_dir / "nmf_tf_best.ckpt")

@@ -182,9 +182,16 @@ class NMFTransformerMOCHI(nn.Module):
         """실효 γ = softplus(raw) (비음수). 로그·해석용."""
         return F.softplus(self.gamma)
 
-    def gamma_l1(self) -> torch.Tensor:
-        """저랭크 세기의 L1 = Σ softplus(γ). 도움이 안 되는 경로를 0으로 눌러 끈다."""
-        return F.softplus(self.gamma).sum()
+    def gamma_l1(self, weights: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """저랭크 세기의 L1 = Σ w_m·softplus(γ_m). 도움이 안 되는 경로를 0으로 눌러 끈다.
+
+        weights가 None이면 균일(모든 모달리티 동일). 특정 모달리티(예: 단백질)만
+        표적으로 끄려면 그 자리만 1, 나머지는 0인 가중치를 준다.
+        """
+        g = F.softplus(self.gamma)
+        if weights is not None:
+            g = g * weights
+        return g.sum()
 
     def predict_W(self, z: torch.Tensor, target: str) -> torch.Tensor:
         """융합 좌표에서 타깃 NMF 계수. 계수는 비음수여야 한다."""
