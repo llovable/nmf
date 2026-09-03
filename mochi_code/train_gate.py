@@ -42,9 +42,22 @@ def build_nmf_basis(X, k=20, ridge=1e-3, device="cpu"):
     return {"H": Ht, "HHt_inv": HHt_inv, "shift": shift_t, "w_mean": w_mean}
 
 
-def nmf_recon_loss(Y, basis):
+def nmf_coefficients(Y, basis, nonneg=True):
+    """예측 Y의 NMF 계수 W. FrozenNMF.encode와 **같은** 정의를 쓴다.
+
+    nonneg=False면 능형 최소제곱 해를 그대로 쓰므로 W에 음수가 섞이고,
+    이 경우 아래 손실은 NMF가 아니라 span(H)로의 선형 사영(=저랭크 부분공간
+    정규화)이 된다. 비음수성이 NMF 해석의 근거이므로 기본값은 True다.
+    """
     Ys = torch.clamp(Y + basis["shift"], min=1e-8)
     W = (Ys @ basis["H"].T) @ basis["HHt_inv"]
+    if nonneg:
+        W = torch.nn.functional.relu(W)
+    return W, Ys
+
+
+def nmf_recon_loss(Y, basis, nonneg=True):
+    W, Ys = nmf_coefficients(Y, basis, nonneg=nonneg)
     rec = W @ basis["H"]
     return torch.nn.functional.mse_loss(rec, Ys)
 
@@ -172,10 +185,15 @@ class WGAN_GP_Trainer_Tri:
             g_wgan = -(self.Dp(y_p, c_p).mean() + self.Dr(y_r, c_r).mean() + self.Dm(y_m, c_m).mean())
         nmf = torch.tensor(0.0, device=self.device)
         if self.nmf_weight > 0 and self.nmf_basis:
+            # nonneg=False로 못 박는다. 이 경로는 논문 표의 MOCHI-v5 비교군을
+            # 만든 코드다. nmf_recon_loss의 기본값이 True로 바뀌었으므로,
+            # 명시하지 않으면 v5를 재학습할 때 손실 정의가 조용히 달라져
+            # 표의 수치가 더 이상 재현되지 않는다. 보고 모형(train_nmf_tf.py)만
+            # 수정된 비음수 정의를 쓴다.
             nmf = (
-                nmf_recon_loss(y_p, self.nmf_basis["protein"])
-                + nmf_recon_loss(y_r, self.nmf_basis["rna"])
-                + nmf_recon_loss(y_m, self.nmf_basis["methyl"])
+                nmf_recon_loss(y_p, self.nmf_basis["protein"], nonneg=False)
+                + nmf_recon_loss(y_r, self.nmf_basis["rna"], nonneg=False)
+                + nmf_recon_loss(y_m, self.nmf_basis["methyl"], nonneg=False)
             )
         mse_term = self.mse_weight * mse
         nmf_term = self.nmf_weight * nmf

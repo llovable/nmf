@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""MIMIR phase1+2를 BRCA 631 스플릿에서 학습한다."""
+"""MIMIR phase1+2를 고정 삼중 스플릿에서 학습한다.
+
+BRCA뿐 아니라 LUAD·KIRC도 --data_dir / --save_dir 만 바꿔 같은 프로토콜로 돌린다.
+"""
 
 import argparse
 from pathlib import Path

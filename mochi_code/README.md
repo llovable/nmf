@@ -27,10 +27,26 @@ archive/                                구 파이프라인
 
 ## 학습
 
+저장소를 어디에 클론했든 `mochi_code/`가 기준입니다. `/home/dyan/nmf`는 예전 서버 경로라 로컬에 없어도 됩니다.
+
+저장소 루트에서 가상환경을 만든 뒤 전처리 패키지만 깐다. torch CUDA 휠은 NVIDIA 머신에서만.
+
 ```bash
-source /home/dyan/nmf/.nmf/bin/activate
-python train_nmf_tf.py --gpu 0
-python paper/figures/plot_pathway_knockout.py
+python3 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip
+pip install -r ../requirements.txt
+bash scripts/fetch_brca.sh
+# NVIDIA GPU가 있을 때만 torch CUDA 휠을 깐 뒤:
+# pip install torch --index-url https://download.pytorch.org/whl/cu124
+bash scripts/run_next_experiments.sh
+```
+
+단일 학습만 돌리려면:
+
+```bash
+python train_nmf_tf.py --gpu 0 --data_dir processed_data/gate_brca \
+  --save_dir results/current/lr_brca_nogan_sp \
+  --gamma_nonneg --w_head_act softplus --gan_to_mse 0
 ```
 
 체크포인트: `results/current/lr_{brca,luad,kirc}_hybrid/nmf_tf_best.ckpt`  
