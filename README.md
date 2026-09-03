@@ -18,7 +18,14 @@ archive/        예전 파이프라인, 노트북, 툴킷
 git clone https://github.com/llovable/nmf.git
 cd nmf
 git checkout cursor/align-manuscript-with-lowrank-path-db76
-# CUDA가 되는 torch가 있는 환경을 켠 다음
+
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install --upgrade pip
+# nvidia-smi 로 CUDA를 확인한 뒤 https://pytorch.org 에서 맞는 명령을 쓴다. 예 (CUDA 12.4):
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
+
 cd mochi_code
 bash scripts/fetch_brca.sh
 bash scripts/run_next_experiments.sh

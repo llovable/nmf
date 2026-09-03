@@ -1,0 +1,21 @@
+# MOCHI 보고 파이프라인 (전처리·학습·평가). Python 3.10+
+#
+# torch는 이 파일에 넣지 않는다. PyPI 기본 휠은 CPU라서
+# mochi_code/scripts/run_next_experiments.sh 가 CUDA 없으면 바로 종료한다.
+#
+# 설치 순서:
+#   python3 -m venv .venv
+#   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+#   pip install --upgrade pip
+#   # nvidia-smi 로 CUDA를 확인한 뒤 https://pytorch.org 명령을 쓴다. 예 (CUDA 12.4):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt
+
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+matplotlib>=3.7.0
+
+# 생존 분석(eval_survival.py)을 돌릴 때만:
+# lifelines>=0.27.0
