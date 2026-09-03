@@ -31,7 +31,7 @@ def check(name, ok, detail=""):
         FAILS.append(name)
 
 
-def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, device="cpu"):
+def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, w_head_act="relu", device="cpu"):
     rng = np.random.default_rng(0)
     toks = {}
     for m, d in dims.items():
@@ -39,7 +39,8 @@ def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, device="cpu"):
         b = build_nmf_basis(X, k=k, device=device)
         toks[m] = FrozenNMF(b["H"], b["shift"], b["HHt_inv"], b["w_mean"])
     return NMFTransformerMOCHI(dims, toks, k=k, d_model=32, n_layers=1,
-                               gamma_init=gamma_init, gamma_nonneg=gamma_nonneg).to(device)
+                               gamma_init=gamma_init, gamma_nonneg=gamma_nonneg,
+                               w_head_act=w_head_act).to(device)
 
 
 def test_a():
@@ -358,9 +359,54 @@ def test_g():
         check(".txt는 거절", not _is_ckpt(f.name))
 
 
+def test_h():
+    """계수 머리 softplus: 초기 잔차 0, 정확한 영 없음, 옛 체크포인트는 relu."""
+    import tempfile
+    from models_nmf_tf import load_nmf_tf
+    print("H) w_head softplus")
+    dims = {"protein": 20, "rna": 40, "methyl": 30}
+    k = 6
+    xs = {mod: torch.randn(16, d) for mod, d in dims.items()}
+    present = {mod: torch.ones(16, dtype=torch.bool) for mod in dims}
+
+    m_sp = make_model(dims, k, gamma_init=0.3, gamma_nonneg=True, w_head_act="softplus")
+    h, W = m_sp.loo_parts(xs, present, "rna")
+    gap = float((m_sp.decode_target("rna", h, W) - m_sp.decoders["rna"](h)).abs().max())
+    check("softplus 머리도 학습 전 저랭크 항이 0", gap < 1e-5, f"|저랭크 기여|={gap:.2e}")
+    check("softplus Ŵ 는 항상 양수", bool((W > 0).all()), f"min={float(W.min()):.2e}")
+
+    m_relu = make_model(dims, k, gamma_init=0.3, gamma_nonneg=True)
+    check("생성자 기본 w_head_act는 relu (옛 ckpt 재현)", m_relu.w_head_act == "relu")
+
+    # 저장 키를 빼면 load_nmf_tf가 relu로 읽는다.
+    with tempfile.TemporaryDirectory() as td:
+        ck = Path(td) / "old.ckpt"
+        torch.save({
+            "model": m_relu.state_dict(), "dims": dims, "k": k,
+            "d_model": 32, "n_heads": 4, "n_layers": 1,
+            "use_nmf_tokens": True, "use_transformer": True, "use_lowrank": True,
+            "gamma_nonneg": True,
+        }, ck)
+        loaded = load_nmf_tf(ck, "cpu")
+        check("키 없는 ckpt는 relu 머리로 로드", loaded.w_head_act == "relu")
+
+        ck2 = Path(td) / "new.ckpt"
+        torch.save({
+            "model": m_sp.state_dict(), "dims": dims, "k": k,
+            "d_model": 32, "n_heads": 4, "n_layers": 1,
+            "use_nmf_tokens": True, "use_transformer": True, "use_lowrank": True,
+            "gamma_nonneg": True, "w_head_act": "softplus",
+        }, ck2)
+        loaded2 = load_nmf_tf(ck2, "cpu")
+        check("w_head_act=softplus 키가 로드된다", loaded2.w_head_act == "softplus")
+
+    from models_nmf_tf import W_HEAD_ACTS
+    check("허용 활성화는 relu와 softplus", W_HEAD_ACTS == ("relu", "softplus"))
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
-    test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g()
+    test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

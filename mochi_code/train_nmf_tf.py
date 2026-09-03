@@ -4,7 +4,8 @@
 NMF-Transformer 학습.
 
 1) 오믹스별 마스크 AE
-2) 고정 NMF 토큰 + Transformer LOO + 자기 AE 재구성 + 약한 조건부 WGAN
+2) 고정 NMF 토큰 + Transformer LOO + 자기 AE 재구성
+조건부 WGAN은 기본으로 끈다 (--gan_to_mse 0). 켜려면 양수를 넘긴다.
 조기 종료는 val 블록 z-RMSE.
 """
 
@@ -19,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from models import ConditionalCritic
 from models_nmf_tf import (
-    D_MODEL, K_DEFAULT, MODS, FrozenNMF, NMFTransformerMOCHI, predict_nmf_tf,
+    D_MODEL, K_DEFAULT, MODS, W_HEAD_ACTS, FrozenNMF, NMFTransformerMOCHI, predict_nmf_tf,
 )
 from models_shared import contrastive_loss, drop_modalities, mask_cells, mse_valid
 from train_gate import TripleSplitDataset, build_nmf_basis, nmf_recon_loss
@@ -211,7 +212,8 @@ def main():
     ap.add_argument("--epochs2", type=int, default=150)
     ap.add_argument("--patience", type=int, default=20)
     ap.add_argument("--batch_size", type=int, default=64)
-    ap.add_argument("--gan_to_mse", type=float, default=0.1)
+    ap.add_argument("--gan_to_mse", type=float, default=0.0,
+                    help="0이면 적대항을 끈다. 보고 모형의 기본. 예전 설정은 0.1")
     ap.add_argument("--no_nmf_tokens", action="store_true")
     ap.add_argument("--no_transformer", action="store_true")
     ap.add_argument("--no_lowrank", action="store_true",
@@ -228,7 +230,12 @@ def main():
     ap.add_argument("--no_nmf_nonneg", dest="nmf_nonneg", action="store_false",
                     help="예전 동작: W에 ReLU를 안 쓴다. 이때 이 항은 NMF가 아니라 "
                          "span(H)로의 선형 사영이다")
+    ap.add_argument("--w_head_act", choices=list(W_HEAD_ACTS), default="softplus",
+                    help="계수 머리 활성화. 기본 softplus. 예전 체크포인트는 relu")
     ap.add_argument("--lambda_w", type=float, default=0.3)
+    ap.add_argument("--ae_ckpt", default="",
+                    help="phase1 AE 가중치(.pt). 있으면 70 epoch 사전학습을 건너뛴다. "
+                         "λ_W 스윕처럼 본체만 다른 학습에 쓴다")
     ap.add_argument("--n_train", type=int, default=0,
                     help="0보다 크면 train을 그만큼만 부분표집한다 (소표본 실험용)")
     ap.add_argument("--seed", type=int, default=0,
@@ -261,7 +268,13 @@ def main():
     }
 
     print("=== phase1 modality AEs ===")
-    encs, decs = pretrain_aes(train_loader, val_loader, dims, device, epochs=args.epochs1)
+    ae_path = Path(args.ae_ckpt) if args.ae_ckpt else None
+    if ae_path and ae_path.exists():
+        ae = torch.load(ae_path, map_location="cpu", weights_only=False)
+        encs, decs = ae["encs"], ae["decs"]
+        print(f"loaded phase1 AE from {ae_path}")
+    else:
+        encs, decs = pretrain_aes(train_loader, val_loader, dims, device, epochs=args.epochs1)
 
     model = NMFTransformerMOCHI(
         dims, tokenizers, k=args.k, d_model=args.d_model, n_layers=args.n_layers,
@@ -270,16 +283,32 @@ def main():
         use_lowrank=not args.no_lowrank,
         gamma_init=args.gamma_init,
         gamma_nonneg=args.gamma_nonneg,
+        w_head_act=args.w_head_act,
     ).to(device)
     for m in MODS:
-        model.encoders[m].load_state_dict(encs[m].state_dict())
-        model.decoders[m].load_state_dict(decs[m].state_dict())
+        model.encoders[m].load_state_dict(encs[m].state_dict() if hasattr(encs[m], "state_dict") else encs[m])
+        model.decoders[m].load_state_dict(decs[m].state_dict() if hasattr(decs[m], "state_dict") else decs[m])
 
-    critics = {
-        "protein": ConditionalCritic(dims["protein"], dims["rna"] + dims["methyl"]).to(device),
-        "rna": ConditionalCritic(dims["rna"], dims["protein"] + dims["methyl"]).to(device),
-        "methyl": ConditionalCritic(dims["methyl"], dims["rna"] + dims["protein"]).to(device),
-    }
+    save_dir = Path(args.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    if not (ae_path and ae_path.exists()):
+        torch.save({
+            "encs": {m: model.encoders[m].state_dict() for m in MODS},
+            "decs": {m: model.decoders[m].state_dict() for m in MODS},
+            "dims": dims,
+        }, save_dir / "ae_phase1.pt")
+        print(f"saved phase1 AE {save_dir / 'ae_phase1.pt'}")
+
+    if args.gan_to_mse > 0:
+        critics = {
+            "protein": ConditionalCritic(dims["protein"], dims["rna"] + dims["methyl"]).to(device),
+            "rna": ConditionalCritic(dims["rna"], dims["protein"] + dims["methyl"]).to(device),
+            "methyl": ConditionalCritic(dims["methyl"], dims["rna"] + dims["protein"]).to(device),
+        }
+        opt_d = Adam([p for D in critics.values() for p in D.parameters()],
+                     lr=1e-4, betas=(0.5, 0.9))
+    else:
+        critics, opt_d = {}, None
     # gamma는 스칼라 3개다. 109만 개 파라미터와 같은 param group에 lr=3e-4로 두면
     # Adam의 스텝당 이동 상한이 대략 lr이라 학습 내내 초기값 근처에 머문다
     # (실측: 40 epoch에서 |Δgamma| < 0.03, gamma_init을 바꾸면 결과가 따라 바뀜).
@@ -293,13 +322,12 @@ def main():
             {"params": gamma_params, "lr": args.gamma_lr, "weight_decay": 0.0},
         ]
     )
-    opt_d = Adam([p for D in critics.values() for p in D.parameters()], lr=1e-4, betas=(0.5, 0.9))
 
-    save_dir = Path(args.save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    print("=== phase2 AE-hidden LOO + NMF tokens + WGAN ===")
+    print("=== phase2 AE-hidden LOO + NMF tokens"
+          + (" + WGAN" if args.gan_to_mse > 0 else " (GAN off)") + " ===")
     print(f"gamma: init={args.gamma_init} lr={args.gamma_lr} nonneg={args.gamma_nonneg}  "
-          f"nmf_loss_nonneg={args.nmf_nonneg}")
+          f"nmf_loss_nonneg={args.nmf_nonneg}  w_head={args.w_head_act}  "
+          f"lambda_w={args.lambda_w}  gan_to_mse={args.gan_to_mse}")
     best, pat = float("inf"), 0
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"params G={n_params:,}")
@@ -322,6 +350,9 @@ def main():
                 "gamma_init": args.gamma_init,
                 "gamma_lr": args.gamma_lr,
                 "nmf_nonneg": args.nmf_nonneg,
+                "w_head_act": args.w_head_act,
+                "lambda_w": args.lambda_w,
+                "gan_to_mse": args.gan_to_mse,
                 "seed": args.seed,
                 "n_train": len(train_ds),
                 "epoch": ep, "val": met,

@@ -28,9 +28,21 @@ K_DEFAULT = 20
 D_MODEL = 128
 
 
+W_HEAD_ACTS = ("relu", "softplus")
+
+
 def _inv_softplus(y: float) -> float:
     """softplus(x) = y 를 만족하는 x. gamma_nonneg일 때 초기값을 맞추는 데 쓴다."""
+    y = max(float(y), 1e-8)
+    if y > 20.0:
+        return y
     return float(np.log(np.expm1(y)))
+
+
+def _inv_softplus_tensor(y: torch.Tensor, floor: float = 1e-8) -> torch.Tensor:
+    """벡터용 inv-softplus. 0 성분은 큰 음수 bias로 보내 softplus≈0이 되게 한다."""
+    y = y.clamp(min=floor)
+    return torch.where(y > 20, y, torch.log(torch.expm1(y)))
 
 
 class FrozenNMF(nn.Module):
@@ -153,8 +165,11 @@ class NMFTransformerMOCHI(nn.Module):
     def __init__(self, dims: Dict[str, int], tokenizers: Dict[str, FrozenNMF],
                  k=K_DEFAULT, d_model=D_MODEL, n_heads=4, n_layers=2,
                  use_nmf_tokens=True, use_transformer=True,
-                 use_lowrank=True, gamma_init=0.3, gamma_nonneg=False):
+                 use_lowrank=True, gamma_init=0.3, gamma_nonneg=False,
+                 w_head_act: str = "relu"):
         super().__init__()
+        if w_head_act not in W_HEAD_ACTS:
+            raise ValueError(f"w_head_act는 {W_HEAD_ACTS} 중 하나여야 합니다: {w_head_act}")
         self.mods = tuple(MODS)
         self.k = k
         self.d_model = d_model
@@ -162,17 +177,23 @@ class NMFTransformerMOCHI(nn.Module):
         self.use_transformer = use_transformer
         self.use_lowrank = use_lowrank
         self.gamma_nonneg = bool(gamma_nonneg)
+        self.w_head_act = w_head_act
         self.encoders = nn.ModuleDict({m: nn.Linear(dims[m], HIDDEN[m]) for m in self.mods})
         self.decoders = nn.ModuleDict({m: nn.Linear(HIDDEN[m], dims[m]) for m in self.mods})
         self.tokenizers = nn.ModuleDict(tokenizers)
         self.to_h = nn.ModuleDict({m: nn.Linear(d_model, HIDDEN[m]) for m in self.mods})
         # 융합 좌표에서 타깃의 NMF 계수를 예측하는 머리. 저랭크 잔차 경로의 입력이 된다.
-        # 가중은 0에서 출발하고 절편은 코호트 평균 계수로 맞춰, 학습 초기에 잔차가 정확히 0이다.
+        # 가중은 0에서 출발하고 절편은 코호트 평균 계수가 활성화 뒤에 나오게 맞춰,
+        # 학습 초기에 잔차 (Ŵ − W̄)H 가 정확히 0이다.
         self.w_head = nn.ModuleDict({m: nn.Linear(d_model, k) for m in self.mods})
         for m in self.mods:
             nn.init.zeros_(self.w_head[m].weight)
             with torch.no_grad():
-                self.w_head[m].bias.copy_(self.tokenizers[m].w_mean)
+                mean = self.tokenizers[m].w_mean
+                if self.w_head_act == "softplus":
+                    self.w_head[m].bias.copy_(_inv_softplus_tensor(mean))
+                else:
+                    self.w_head[m].bias.copy_(mean)
         # gamma는 저랭크 잔차의 게이트다. 파라미터 이름은 예전 체크포인트와 맞춘다.
         # gamma_nonneg=True면 이 값은 raw이고 실효 게이트는 softplus(raw) ≥ 0 이다.
         raw_init = float(gamma_init)
@@ -210,8 +231,16 @@ class NMFTransformerMOCHI(nn.Module):
         return self
 
     def predict_W(self, z: torch.Tensor, target: str) -> torch.Tensor:
-        """융합 좌표에서 타깃 NMF 계수. 계수는 비음수여야 한다."""
-        return F.relu(self.w_head[target](z))
+        """융합 좌표에서 타깃 NMF 계수. 계수는 비음수여야 한다.
+
+        relu는 성분별로 정확히 0을 낼 수 있다. softplus는 같은 비음수를
+        유지하되 정확한 영은 만들지 않는다. Hamming이 독립 귀무와 같았던
+        서명이 ReLU 절단 때문인지를 이 선택으로 가른다.
+        """
+        raw = self.w_head[target](z)
+        if self.w_head_act == "softplus":
+            return F.softplus(raw)
+        return F.relu(raw)
 
     def decode_target(self, target: str, h: torch.Tensor,
                       W: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -329,8 +358,9 @@ def load_nmf_tf(path, device):
         use_nmf_tokens=ck.get("use_nmf_tokens", True),
         use_transformer=ck.get("use_transformer", True),
         use_lowrank=ck.get("use_lowrank", "gamma" in sd),
-        # 예전 체크포인트에는 이 키가 없다. 없으면 무제약 gamma로 읽어 그대로 재현된다.
+        # 예전 체크포인트에는 이 키가 없다. 없으면 무제약 gamma·ReLU 머리로 읽어 재현된다.
         gamma_nonneg=ck.get("gamma_nonneg", False),
+        w_head_act=ck.get("w_head_act", "relu"),
     ).to(device)
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if unexpected:

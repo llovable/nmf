@@ -127,7 +127,7 @@ def draw_a(ax):
         "Decoder  $D_t(h_t)$",
         fc="#FFFFFF", ec=COL["fuse"], tc="#1A4D38", fs=7.2)
     box(ax, 12.2, 2.85, 5.3, 1.45,
-        "Coefficient head  $\\hat{W}_t=\\mathrm{ReLU}(A_t z+b_t)$\n"
+        "Coefficient head  $\\hat{W}_t=\\mathrm{softplus}(A_t z+b_t)$\n"
         "Low-rank residual  (trained $\\gamma_t$)\n"
         "$\\gamma_t\\,(\\hat{W}_t-\\bar{W}_t)\\,H_t$",
         fc="#FFF4EC", ec=COL["nmf"], tc=COL["nmf"], lw=1.2, fs=7.2, weight="medium")
