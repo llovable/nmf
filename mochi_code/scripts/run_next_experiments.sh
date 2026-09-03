@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # 보고 모형 재학습 → λ_W 스윕 → 표 7–9 재평가. GPU 필수.
+# 저장소 어디에 클론했든 이 스크립트 위치(mochi_code/)를 ROOT로 쓴다.
 set -euo pipefail
-if [[ -d /home/dyan/nmf/mochi_code ]]; then
-  ROOT="${ROOT:-/home/dyan/nmf/mochi_code}"
-else
-  ROOT="${ROOT:-/workspace/mochi_code}"
-fi
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATA="${DATA:-$ROOT/processed_data/gate_brca}"
 CLIN="${CLIN:-$ROOT/processed_data/clinical}"
 RES="${RES:-$ROOT/results/current}"
@@ -13,6 +10,7 @@ PY="${PY:-python3}"
 GPU="${GPU:-0}"
 cd "$ROOT"
 export PYTHONUNBUFFERED=1
+echo "ROOT=$ROOT"
 
 "$PY" - <<'PY'
 import sys
