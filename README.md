@@ -12,11 +12,16 @@ baselines/      공식 OmicsNMF, OmiTrans, MIMIR (비교군, 수정하지 않음
 archive/        예전 파이프라인, 노트북, 툴킷
 ```
 
+로컬 GPU에서 클론한 뒤 돌립니다. `/home/dyan/nmf`나 클라우드 VM의 `/workspace`는 쓰지 않습니다. 전처리 행렬은 gitignore라 따로 받습니다.
+
 ```bash
-source /home/dyan/nmf/.nmf/bin/activate
+git clone https://github.com/llovable/nmf.git
+cd nmf
+git checkout cursor/align-manuscript-with-lowrank-path-db76
+# CUDA가 되는 torch가 있는 환경을 켠 다음
 cd mochi_code
-python train_nmf_tf.py --gpu 0
-python paper/figures/plot_pathway_knockout.py
+bash scripts/fetch_brca.sh
+bash scripts/run_next_experiments.sh
 ```
 
 그림 1은 `mochi_code/paper/figures/fig1_pathway_knockout.pdf`입니다.
