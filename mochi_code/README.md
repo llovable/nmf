@@ -10,6 +10,7 @@
 | `models_nmf_tf.py` | 보고 모형: AE 은닉 + NMF 토큰 + 저랭크 잔차 |
 | `train_nmf_tf.py` | **현재 학습** |
 | `eval_biology.py` | 경로·환자구조·교차오믹스 보존 |
+| `eval_amplitude.py` | 경로 진폭 수축 → 군집·차등발현 |
 | `eval_mcar_mnar.py` | 칸 결측 MCAR/MNAR |
 | `official_wrap.py` / `mimir_wrap.py` | 비교군 래퍼 |
 | `models.py` | Generator / ConditionalCritic (공용) |

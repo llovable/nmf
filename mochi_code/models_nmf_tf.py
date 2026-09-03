@@ -4,9 +4,13 @@
 NMF-Transformer MOCHI.
 
 재구성·LOO의 주 경로는 오믹스별 AE 히든.
-NMF 계수 W는 두 갈래로 쓰인다. Transformer의 보조 토큰이자,
-디코더 출력에 더해지는 저랭크 잔차 γ(Ŵ - W̄)H의 입력이다.
-후자는 γ를 0으로 두는 것만으로 재학습 없이 기여도를 잘라낼 수 있다.
+NMF 계수 W는 Transformer 보조 토큰이고, add_residual이면 디코더에
+저랭크 잔차 γ(Ŵ − W̄)H를 더한다. aux_w_only 학습은 잔차를 더하지 않고
+W를 보조 손실로만 쓴다.
+
+녹아웃은 set_lowrank(False)를 쓴다. 원시 γ를 0으로 두는 것은
+gamma_nonneg=False 일 때만 경로를 끈다. softplus(γ)는 0→0.693 이라
+문을 닫지 않고 연다.
 칸 결측은 자기 히든 가중 + LOO 히든.
 """
 
@@ -23,6 +27,47 @@ from models_shared import HIDDEN, MODS
 
 K_DEFAULT = 20
 D_MODEL = 128
+
+
+class EncMLP(nn.Module):
+    """인코더: 선형 한 층 대신 LN+GELU 2단."""
+
+    def __init__(self, d_in: int, d_h: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_in, d_h),
+            nn.LayerNorm(d_h),
+            nn.GELU(),
+            nn.Linear(d_h, d_h),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class DecMLP(nn.Module):
+    """디코더: 히든 → 특징. 인코더와 대칭."""
+
+    def __init__(self, d_h: int, d_out: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_h, d_h),
+            nn.LayerNorm(d_h),
+            nn.GELU(),
+            nn.Linear(d_h, d_out),
+        )
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        return self.net(h)
+
+
+def _softplus_inv(y: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
+    """softplus(x)=y 가 되도록. W 머리 절편을 코호트 평균에 맞출 때 쓴다.
+
+    y가 크면 expm1이 float32에서 넘치므로 softplus^{-1}(y)≈y 로 둔다.
+    """
+    y = y.clamp_min(eps)
+    return torch.where(y > 20.0, y, torch.log(torch.expm1(y)))
 
 
 class FrozenNMF(nn.Module):
@@ -145,16 +190,32 @@ class NMFTransformerMOCHI(nn.Module):
     def __init__(self, dims: Dict[str, int], tokenizers: Dict[str, FrozenNMF],
                  k=K_DEFAULT, d_model=D_MODEL, n_heads=4, n_layers=2,
                  use_nmf_tokens=True, use_transformer=True,
-                 use_lowrank=True, gamma_init=0.3):
+                 use_lowrank=True, gamma_init=0.3,
+                 w_from_others=False, freeze_protein_gamma=False,
+                 add_residual=True, mlp_ae=False,
+                 gamma_nonneg=False, w_head_act="relu", clamp_gamma=False):
         super().__init__()
+        if w_head_act not in ("relu", "softplus"):
+            raise ValueError(f"w_head_act={w_head_act}")
         self.mods = tuple(MODS)
         self.k = k
         self.d_model = d_model
         self.use_nmf_tokens = use_nmf_tokens
         self.use_transformer = use_transformer
         self.use_lowrank = use_lowrank
-        self.encoders = nn.ModuleDict({m: nn.Linear(dims[m], HIDDEN[m]) for m in self.mods})
-        self.decoders = nn.ModuleDict({m: nn.Linear(HIDDEN[m], dims[m]) for m in self.mods})
+        self.w_from_others = w_from_others
+        self.freeze_protein_gamma = freeze_protein_gamma
+        self.add_residual = add_residual
+        self.mlp_ae = mlp_ae
+        self.gamma_nonneg = gamma_nonneg
+        self.w_head_act = w_head_act
+        self.clamp_gamma = clamp_gamma
+        if mlp_ae:
+            self.encoders = nn.ModuleDict({m: EncMLP(dims[m], HIDDEN[m]) for m in self.mods})
+            self.decoders = nn.ModuleDict({m: DecMLP(HIDDEN[m], dims[m]) for m in self.mods})
+        else:
+            self.encoders = nn.ModuleDict({m: nn.Linear(dims[m], HIDDEN[m]) for m in self.mods})
+            self.decoders = nn.ModuleDict({m: nn.Linear(HIDDEN[m], dims[m]) for m in self.mods})
         self.tokenizers = nn.ModuleDict(tokenizers)
         self.to_h = nn.ModuleDict({m: nn.Linear(d_model, HIDDEN[m]) for m in self.mods})
         # 융합 좌표에서 타깃의 NMF 계수를 예측하는 머리. 저랭크 잔차 경로의 입력이 된다.
@@ -163,25 +224,104 @@ class NMFTransformerMOCHI(nn.Module):
         for m in self.mods:
             nn.init.zeros_(self.w_head[m].weight)
             with torch.no_grad():
-                self.w_head[m].bias.copy_(self.tokenizers[m].w_mean)
-        self.gamma = nn.Parameter(torch.full((len(self.mods),), float(gamma_init)))
+                mean = self.tokenizers[m].w_mean
+                if w_head_act == "softplus":
+                    self.w_head[m].bias.copy_(_softplus_inv(mean))
+                else:
+                    self.w_head[m].bias.copy_(mean)
+        # 소스별 선형 → 마스크 합. concat+0채움은 빠진 오믹스가 절편으로 스며든다.
+        self.w_from = nn.ModuleDict()
+        if w_from_others:
+            for tgt in self.mods:
+                layers = nn.ModuleDict()
+                for src in self.mods:
+                    if src == tgt:
+                        continue
+                    layer = nn.Linear(HIDDEN[src], k, bias=False)
+                    nn.init.zeros_(layer.weight)
+                    layers[src] = layer
+                self.w_from[tgt] = layers
+        g0 = torch.full((len(self.mods),), float(gamma_init))
+        if gamma_nonneg:
+            g0 = _softplus_inv(g0.clamp_min(1e-4))
+        self.gamma = nn.Parameter(g0)
+        if not add_residual:
+            self.gamma.requires_grad_(False)
+        if freeze_protein_gamma:
+            with torch.no_grad():
+                self.gamma[self.mods.index("protein")] = 0.0
         self.fuse = NMFTransformer(
             k=k, d_model=d_model, n_heads=n_heads, n_layers=n_layers,
             use_nmf_tokens=use_nmf_tokens, use_transformer=use_transformer,
         )
 
+    def _apply_w_act(self, raw: torch.Tensor) -> torch.Tensor:
+        if self.w_head_act == "softplus":
+            return F.softplus(raw)
+        return F.relu(raw)
+
     def _gamma(self, target: str) -> torch.Tensor:
-        return self.gamma[self.mods.index(target)]
+        if self.freeze_protein_gamma and target == "protein":
+            return self.gamma.new_zeros(())
+        g = self.gamma[self.mods.index(target)]
+        if self.gamma_nonneg:
+            return F.softplus(g)
+        if self.clamp_gamma:
+            return g.clamp(0.0, 1.0)
+        return g
+
+    def gamma_log(self) -> str:
+        """학습 로그용. 잔차를 더하지 않으면 unused."""
+        if not (self.use_lowrank and self.add_residual):
+            return "unused"
+        return ",".join(f"{float(self._gamma(m)):.2f}" for m in self.mods)
+
+    def set_lowrank(self, enabled: bool) -> None:
+        """재학습 없이 저랭크 잔차 가산만 켠다/끈다. 토큰·W 머리는 유지.
+
+        gamma_nonneg이면 원시 γ를 0으로 두는 것으로는 문이 닫히지 않는다
+        (softplus(0)≈0.693). 그때는 add_residual만 끈다.
+        """
+        self.add_residual = bool(enabled)
+        if enabled:
+            self.gamma.requires_grad_(True)
+            return
+        self.gamma.requires_grad_(False)
+        if not self.gamma_nonneg:
+            with torch.no_grad():
+                self.gamma.zero_()
 
     def predict_W(self, z: torch.Tensor, target: str) -> torch.Tensor:
         """융합 좌표에서 타깃 NMF 계수. 계수는 비음수여야 한다."""
-        return F.relu(self.w_head[target](z))
+        return self._apply_w_act(self.w_head[target](z))
+
+    def predict_W_others(self, hs: Dict[str, torch.Tensor], target: str,
+                         keep: Optional[Dict[str, torch.Tensor]] = None) -> torch.Tensor:
+        """관측된 다른 오믹스 은닉에서 타깃 NMF 계수를 낸다.
+
+        소스마다 선형층을 두고 있는 샘플만 더한다. 빠진 오믹스를 0으로
+        이어붙이면 인코더 절편이 계수 예측의 편향이 된다.
+        """
+        ref = next(iter(hs.values()))
+        mean = self.tokenizers[target].w_mean
+        if self.w_head_act == "softplus":
+            raw = _softplus_inv(mean).unsqueeze(0).expand(ref.size(0), -1).clone()
+        else:
+            raw = mean.unsqueeze(0).expand(ref.size(0), -1).clone()
+        for src, layer in self.w_from[target].items():
+            if src not in hs:
+                continue
+            h = hs[src]
+            if keep is not None and src in keep:
+                h = h * keep[src].float().unsqueeze(-1)
+            raw = raw + layer(h)
+        return self._apply_w_act(raw)
 
     def decode_target(self, target: str, h: torch.Tensor,
                       W: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """디코더 출력에 저랭크 생물학 구조를 잔차로 더한다."""
+        """디코더 출력. add_residual이면 저랭크 편차를 더한다."""
         out = self.decoders[target](h)
-        if self.use_lowrank and W is not None:
+        if self.use_lowrank and self.add_residual and W is not None:
             out = out + self._gamma(target) * self.tokenizers[target].decode_dev(W)
         return out
 
@@ -213,8 +353,17 @@ class NMFTransformerMOCHI(nn.Module):
     def loo_parts(self, xs: Dict[str, torch.Tensor], present: Dict[str, torch.Tensor],
                   target: str):
         """(은닉, 예측 NMF 계수). 보조 손실이 계수를 감독한다."""
-        z = self.fused_for(xs, present, target)
-        W = self.predict_W(z, target) if self.use_lowrank else None
+        xs_loo = {m: x for m, x in xs.items() if m != target}
+        hs = self.encode_h(xs_loo)
+        Ws = self.encode_W(xs_loo)
+        keep = {m: p.clone() for m, p in present.items() if m != target}
+        z = self.fuse.fused_z(hs, Ws, keep, skip=target)
+        W = None
+        if self.use_lowrank:
+            if self.w_from_others:
+                W = self.predict_W_others(hs, target, keep=keep)
+            else:
+                W = self.predict_W(z, target)
         return self.to_h[target](z), W
 
     def loo_reconstruct(self, xs: Dict[str, torch.Tensor], present: Dict[str, torch.Tensor],
@@ -276,6 +425,62 @@ def predict_nmf_tf(model: NMFTransformerMOCHI, tabs: Dict[str, np.ndarray], devi
     return {m: np.concatenate(acc[m], 0) for m in MODS}
 
 
+def _ckpt_arch(ck, sd):
+    """플래그와 가중치 모양이 맞는지 검사한다. 침묵 기본값으로 활성함수를 바꾸지 않는다."""
+    has_mlp_w = any(k.startswith("encoders.") and ".net." in k for k in sd)
+    has_w_from = any(k.startswith("w_from.") for k in sd)
+    era_new = any(k in ck for k in ("mlp_ae", "add_residual", "w_from_others"))
+
+    if "mlp_ae" in ck:
+        mlp_ae = bool(ck["mlp_ae"])
+        if mlp_ae != has_mlp_w:
+            raise RuntimeError(f"mlp_ae={mlp_ae} 인데 인코더 MLP 가중치={has_mlp_w}")
+    elif has_mlp_w:
+        raise RuntimeError("인코더가 MLP 가중치인데 mlp_ae 플래그가 없다")
+    else:
+        mlp_ae = False
+
+    if "w_from_others" in ck:
+        w_from_others = bool(ck["w_from_others"])
+        if w_from_others != has_w_from:
+            raise RuntimeError(f"w_from_others={w_from_others} 인데 w_from 가중치={has_w_from}")
+    else:
+        w_from_others = has_w_from
+
+    if "add_residual" in ck:
+        add_residual = bool(ck["add_residual"])
+    elif era_new:
+        raise RuntimeError("실험 계보 체크포인트에 add_residual이 없다")
+    else:
+        add_residual = True
+
+    if "w_head_act" in ck:
+        w_head_act = ck["w_head_act"]
+        if w_head_act not in ("relu", "softplus"):
+            raise RuntimeError(f"알 수 없는 w_head_act={w_head_act}")
+    elif era_new:
+        w_head_act = "softplus"
+        print("경고: w_head_act 없음 → softplus (aux_w/wide 계보)")
+    else:
+        w_head_act = "relu"
+
+    if "gamma_nonneg" in ck:
+        gamma_nonneg = bool(ck["gamma_nonneg"])
+    else:
+        gamma_nonneg = False
+    if "clamp_gamma" in ck:
+        clamp_gamma = bool(ck["clamp_gamma"])
+    else:
+        clamp_gamma = bool(era_new)
+
+    return dict(
+        mlp_ae=mlp_ae, w_from_others=w_from_others, add_residual=add_residual,
+        w_head_act=w_head_act, gamma_nonneg=gamma_nonneg, clamp_gamma=clamp_gamma,
+        freeze_protein_gamma=bool(ck.get("freeze_protein_gamma", False)),
+        use_lowrank=ck.get("use_lowrank", "gamma" in sd),
+    )
+
+
 def load_nmf_tf(path, device):
     ck = torch.load(path, map_location=device, weights_only=False)
     dims, k = ck["dims"], ck.get("k", K_DEFAULT)
@@ -287,17 +492,25 @@ def load_nmf_tf(path, device):
         shift = sd[prefix + "shift"]
         inv = sd[prefix + "HHt_inv"]
         tokenizers[m] = FrozenNMF(H, shift, inv, sd.get(prefix + "w_mean"))
+    arch = _ckpt_arch(ck, sd)
     model = NMFTransformerMOCHI(
         dims, tokenizers, k=k, d_model=ck.get("d_model", D_MODEL),
         n_heads=ck.get("n_heads", 4), n_layers=ck.get("n_layers", 2),
         use_nmf_tokens=ck.get("use_nmf_tokens", True),
         use_transformer=ck.get("use_transformer", True),
-        use_lowrank=ck.get("use_lowrank", "gamma" in sd),
+        use_lowrank=arch["use_lowrank"],
+        w_from_others=arch["w_from_others"],
+        freeze_protein_gamma=arch["freeze_protein_gamma"],
+        add_residual=arch["add_residual"],
+        mlp_ae=arch["mlp_ae"],
+        gamma_nonneg=arch["gamma_nonneg"],
+        w_head_act=arch["w_head_act"],
+        clamp_gamma=arch["clamp_gamma"],
     ).to(device)
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if unexpected:
         raise RuntimeError(f"예상 밖 가중치: {unexpected}")
-    allowed = ("w_head.", "gamma")
+    allowed = ("w_head.", "gamma", "w_from.")
     stale = [k for k in missing if not (k.startswith(allowed) or k.endswith("w_mean"))]
     if stale:
         raise RuntimeError(f"빠진 가중치: {stale}")

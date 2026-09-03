@@ -194,10 +194,11 @@ def main():
         if not Path(path).exists():
             continue
         mdl = load_nmf_tf(path, device)
-        # 세 번째 칸이 gamma0이면 추론 시 저랭크 잔차를 꺼서 기여도를 녹아웃한다.
+        # 세 번째 칸이 gamma0이면 저랭크 잔차 가산만 끈다.
         if len(parts) > 2 and parts[2] == "gamma0":
-            with torch.no_grad():
-                mdl.gamma.zero_()
+            if not mdl.add_residual:
+                print(f"{name}: add_residual=False 이므로 gamma0 녹아웃은 무연산")
+            mdl.set_lowrank(False)
         models[name] = mdl
 
     mimir = mimir_mv = None

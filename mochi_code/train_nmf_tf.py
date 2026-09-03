@@ -63,8 +63,9 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
     for D in critics.values():
         D.train()
     sums = {"total": 0.0, "recon": 0.0, "loo": 0.0, "con": 0.0, "nmf": 0.0,
-            "w": 0.0, "wgan": 0.0, "D": 0.0}
+            "w": 0.0, "wgan": 0.0, "D": 0.0, "wcorr": 0.0}
     n = 0
+    n_w_all = 0
     for batch in loader:
         xs, obs = _batch_tensors(batch, device)
         b = xs["rna"].size(0)
@@ -133,6 +134,11 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                     W_ref = model.tokenizers[tgt].encode(xs[tgt])
                 wloss = wloss + F.mse_loss(W_t[can], W_ref[can])
                 n_w += 1
+                n_w_all += 1
+                wp, wr = W_t[can], W_ref[can]
+                az, bz = wp - wp.mean(0), wr - wr.mean(0)
+                den = (az.pow(2).sum(0) * bz.pow(2).sum(0)).sqrt().clamp_min(1e-8)
+                sums["wcorr"] += float((az * bz).sum(0).div(den).mean().item())
         lloss = lloss / max(n_l, 1) if n_l else rloss.new_zeros(())
         wloss = wloss / max(n_w, 1) if n_w else wloss
 
@@ -176,7 +182,9 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
         sums["w"] += float(wloss.item())
         sums["wgan"] += float(g_wgan.item()) if torch.is_tensor(g_wgan) else float(g_wgan)
         n += 1
-    return {k: v / max(n, 1) for k, v in sums.items()}
+    out = {k: v / max(n, 1) for k, v in sums.items()}
+    out["wcorr"] = sums["wcorr"] / max(n_w_all, 1) if n else 0.0
+    return out
 
 
 @torch.no_grad()
@@ -203,12 +211,35 @@ def main():
     ap.add_argument("--patience", type=int, default=20)
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--gan_to_mse", type=float, default=0.1)
+    ap.add_argument("--lambda_nmf", type=float, default=0.1,
+                    help="출력단 NMF 재구성 정규화 가중. 로그의 nmf는 이 값을 곱하기 전")
     ap.add_argument("--no_nmf_tokens", action="store_true")
     ap.add_argument("--no_transformer", action="store_true")
     ap.add_argument("--no_lowrank", action="store_true",
                     help="저랭크 NMF 잔차 경로와 계수 보조 손실을 끈다")
+    ap.add_argument("--w_from_others", action="store_true",
+                    help="융합 z가 아니라 다른 오믹스 은닉에서 W를 예측한다")
+    ap.add_argument("--freeze_protein_gamma", action="store_true",
+                    help="단백질 저랭크 잔차를 끈다 (오차를 늘리므로)")
+    ap.add_argument("--aux_w_only", action="store_true",
+                    help="NMF 계수는 보조 손실로만 쓰고 디코더에 더하지 않는다")
+    ap.add_argument("--mlp_ae", action="store_true",
+                    help="오믹스 AE를 LN+GELU 2단 MLP로 둔다")
     ap.add_argument("--gamma_init", type=float, default=0.3)
+    ap.add_argument("--gamma_nonneg", action="store_true",
+                    help="γ에 softplus. softplus(0)≈0.693이라 녹아웃이 안 되므로 기본 꺼 둠")
+    ap.add_argument("--w_head_act", choices=("relu", "softplus"), default="softplus")
     ap.add_argument("--lambda_w", type=float, default=0.3)
+    ap.add_argument("--lambda_loo", type=float, default=1.5,
+                    help="LOO 번역 손실 가중. 로그의 loo는 이 값을 곱하기 전")
+    ap.add_argument("--lambda_con", type=float, default=0.2,
+                    help="오믹스 대조 손실 가중. 로그의 con은 이 값을 곱하기 전")
+    ap.add_argument("--mask_p", type=float, default=0.15,
+                    help="칸 마스크 비율. 평가 입력은 0. 번역 경로에도 같이 걸린다")
+    ap.add_argument("--drop_p", type=float, default=0.4,
+                    help="오믹스 독립 드롭 확률. 평가 블록 결측은 나머지가 항상 둘 다 있다")
+    ap.add_argument("--alpha", type=float, default=0.5,
+                    help="재구성에서 마스킹 칸 MSE 비중")
     ap.add_argument("--n_train", type=int, default=0,
                     help="0보다 크면 train을 그만큼만 부분표집한다 (소표본 실험용)")
     ap.add_argument("--seed", type=int, default=0,
@@ -241,7 +272,12 @@ def main():
     }
 
     print("=== phase1 modality AEs ===")
-    encs, decs = pretrain_aes(train_loader, val_loader, dims, device, epochs=args.epochs1)
+    ae_kw = {}
+    if args.mlp_ae:
+        from models_nmf_tf import EncMLP, DecMLP
+        ae_kw = dict(make_enc=EncMLP, make_dec=DecMLP)
+        print("mlp_ae: LN+GELU 2단 인코더/디코더")
+    encs, decs = pretrain_aes(train_loader, val_loader, dims, device, epochs=args.epochs1, **ae_kw)
 
     model = NMFTransformerMOCHI(
         dims, tokenizers, k=args.k, d_model=args.d_model, n_layers=args.n_layers,
@@ -249,6 +285,13 @@ def main():
         use_transformer=not args.no_transformer,
         use_lowrank=not args.no_lowrank,
         gamma_init=args.gamma_init,
+        w_from_others=args.w_from_others,
+        freeze_protein_gamma=args.freeze_protein_gamma,
+        add_residual=not args.aux_w_only,
+        mlp_ae=args.mlp_ae,
+        gamma_nonneg=args.gamma_nonneg,
+        w_head_act=args.w_head_act,
+        clamp_gamma=not args.gamma_nonneg,
     ).to(device)
     for m in MODS:
         model.encoders[m].load_state_dict(encs[m].state_dict())
@@ -265,12 +308,21 @@ def main():
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     print("=== phase2 AE-hidden LOO + NMF tokens + WGAN ===")
+    if args.aux_w_only:
+        print("aux_w_only: W는 보조 손실, 디코더에 γWH를 더하지 않음")
+    print(f"loss λ: loo={args.lambda_loo} con={args.lambda_con} nmf={args.lambda_nmf} "
+          f"w={args.lambda_w} gan_to_mse={args.gan_to_mse}  "
+          f"mask_p={args.mask_p} drop_p={args.drop_p} alpha={args.alpha}  "
+          f"(로그 recon/loo/con/nmf/w 는 가중 전)")
     best, pat = float("inf"), 0
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"params G={n_params:,}")
     for ep in range(1, args.epochs2 + 1):
         tr = train_epoch(model, critics, bases, train_loader, opt_g, opt_d, device,
-                         gan_to_mse=args.gan_to_mse, lambda_w=args.lambda_w)
+                         mask_p=args.mask_p, drop_p=args.drop_p,
+                         lambda_loo=args.lambda_loo, lambda_con=args.lambda_con,
+                         lambda_nmf=args.lambda_nmf, lambda_w=args.lambda_w,
+                         alpha=args.alpha, gan_to_mse=args.gan_to_mse)
         met = block_zrmse(model, val_ds, device)
         mark = ""
         if met["avg"] < best:
@@ -281,14 +333,25 @@ def main():
                 "use_nmf_tokens": not args.no_nmf_tokens,
                 "use_transformer": not args.no_transformer,
                 "use_lowrank": not args.no_lowrank,
+                "w_from_others": args.w_from_others,
+                "freeze_protein_gamma": args.freeze_protein_gamma,
+                "add_residual": not args.aux_w_only,
+                "mlp_ae": args.mlp_ae,
+                "gamma_nonneg": args.gamma_nonneg,
+                "w_head_act": args.w_head_act,
+                "clamp_gamma": not args.gamma_nonneg,
+                "lambda_w": args.lambda_w, "lambda_nmf": args.lambda_nmf,
+                "lambda_loo": args.lambda_loo, "lambda_con": args.lambda_con,
+                "mask_p": args.mask_p, "drop_p": args.drop_p, "alpha": args.alpha,
+                "gan_to_mse": args.gan_to_mse,
                 "epoch": ep, "val": met,
             }, save_dir / "nmf_tf_best.ckpt")
         else:
             pat += 1
-        gam = ",".join(f"{float(g):.2f}" for g in model.gamma.detach().cpu())
         print(f"ep {ep:03d} tot={tr['total']:.4f} recon={tr['recon']:.4f} "
               f"loo={tr['loo']:.4f} con={tr['con']:.4f} nmf={tr['nmf']:.4f} "
-              f"w={tr['w']:.4f} wgan={tr['wgan']:.4f} gamma={gam}  "
+              f"w={tr['w']:.4f} wcorr={tr['wcorr']:.3f} wgan={tr['wgan']:.4f} "
+              f"gamma={model.gamma_log()}  "
               f"val zRMSE avg={met['avg']:.4f} "
               f"P={met['protein']:.4f} R={met['rna']:.4f} M={met['methyl']:.4f}{mark}")
         if ep > 15 and pat >= args.patience:
