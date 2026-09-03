@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 옵션 2: NMF는 보조 손실 유지, 융합 256 + MLP AE로 용량만 키운다.
+# 용량만 키운다. λ_w·GAN은 앵커(aux_w)와 같게 둔다.
+# 디스크의 results/current/lr_wide/ 는 λ_w=0.1 로 돌아간 옛 런이라 용량 비교에 쓰지 않는다.
 set -euo pipefail
 cd /home/dyan/nmf/mochi_code
 # shellcheck disable=SC1091
@@ -12,7 +13,7 @@ train_one() {
   local cohort=$1 gpu=$2
   local save=$LOGDIR/${cohort}_hybrid
   mkdir -p "$save"
-  echo "$(date) === train $cohort GPU=$gpu d_model=256 mlp_ae aux_w_only lambda_w=0.1 ==="
+  echo "$(date) === train $cohort GPU=$gpu d_model=256 mlp_ae aux_w_only lambda_w=2.0 gan_to_mse=0 ==="
   python -u train_nmf_tf.py \
     --data_dir processed_data/gate_$cohort \
     --save_dir "$save" \
@@ -21,7 +22,8 @@ train_one() {
     --mlp_ae \
     --w_from_others \
     --aux_w_only \
-    --lambda_w 0.1 \
+    --lambda_w 2.0 \
+    --gan_to_mse 0 \
     | tee "$save/train.log"
 }
 

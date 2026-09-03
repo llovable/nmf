@@ -31,7 +31,8 @@ def check(name, ok, detail=""):
         FAILS.append(name)
 
 
-def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, w_head_act="relu", device="cpu"):
+def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, w_head_act="relu",
+               add_residual=True, device="cpu"):
     rng = np.random.default_rng(0)
     toks = {}
     for m, d in dims.items():
@@ -40,7 +41,8 @@ def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, w_head_act="relu", d
         toks[m] = FrozenNMF(b["H"], b["shift"], b["HHt_inv"], b["w_mean"])
     return NMFTransformerMOCHI(dims, toks, k=k, d_model=32, n_layers=1,
                                gamma_init=gamma_init, gamma_nonneg=gamma_nonneg,
-                               w_head_act=w_head_act).to(device)
+                               w_head_act=w_head_act,
+                               add_residual=add_residual).to(device)
 
 
 def test_a():
@@ -404,9 +406,60 @@ def test_h():
     check("허용 활성화는 relu와 softplus", W_HEAD_ACTS == ("relu", "softplus"))
 
 
+def test_i():
+    """--aux_w_only ≡ add_residual=False. 죽은 gamma, unused 로그, 녹아웃이 add_residual까지 내린다."""
+    import tempfile
+    from models_nmf_tf import load_nmf_tf
+    print("I) aux_w_only / add_residual")
+    dims = {"protein": 20, "rna": 40, "methyl": 30}
+    k = 6
+    xs = {mod: torch.randn(16, d) for mod, d in dims.items()}
+    present = {mod: torch.ones(16, dtype=torch.bool) for mod in dims}
+
+    m = make_model(dims, k, add_residual=False)
+    check("add_residual=False면 gamma.requires_grad가 꺼진다", not m.gamma.requires_grad)
+    check("잔차를 안 더하면 gamma_log는 unused", m.gamma_log() == "unused")
+
+    with torch.no_grad():
+        m.w_head["rna"].weight.normal_(0, 0.1)
+    h, W = m.loo_parts(xs, present, "rna")
+    gap = float((m.decode_target("rna", h, W) - m.decoders["rna"](h)).abs().max())
+    check("aux_w_only는 디코더에 저랭크를 더하지 않는다", gap < 1e-6, f"|기여|={gap:.2e}")
+    check("W 머리는 계수를 계속 낸다", W is not None)
+
+    m_on = make_model(dims, k, gamma_nonneg=True, add_residual=True)
+    with torch.no_grad():
+        m_on.w_head["rna"].weight.normal_(0, 0.1)
+    h2, W2 = m_on.loo_parts(xs, present, "rna")
+    with_lr = m_on.decode_target("rna", h2, W2)
+    lin = m_on.decoders["rna"](h2)
+    check("잔차 on이면 저랭크가 출력을 바꾼다",
+          not torch.allclose(with_lr, lin, atol=1e-6))
+    m_on.set_lowrank(False)
+    check("set_lowrank(False)는 add_residual도 내린다", m_on.add_residual is False)
+    check("set_lowrank(False)는 use_lowrank도 내린다", m_on.use_lowrank is False)
+    without = m_on.decode_target("rna", h2, W2)
+    check("set_lowrank 후 저랭크 항이 0",
+          bool(torch.allclose(without, lin, atol=1e-6)))
+    check("녹아웃 후 gamma_log는 unused", m_on.gamma_log() == "unused")
+
+    with tempfile.TemporaryDirectory() as td:
+        ck = Path(td) / "aux.ckpt"
+        torch.save({
+            "model": m.state_dict(), "dims": dims, "k": k,
+            "d_model": 32, "n_heads": 4, "n_layers": 1,
+            "use_nmf_tokens": True, "use_transformer": True, "use_lowrank": True,
+            "add_residual": False, "mlp_ae": False, "w_from_others": False,
+            "w_head_act": "relu",
+        }, ck)
+        loaded = load_nmf_tf(ck, "cpu")
+        check("ckpt add_residual=False가 로드된다", loaded.add_residual is False)
+        check("로드된 aux_w 모델의 gamma_log는 unused", loaded.gamma_log() == "unused")
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
-    test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h()
+    test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h(); test_i()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

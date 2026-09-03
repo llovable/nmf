@@ -20,6 +20,7 @@ train_one() {
     --w_from_others \
     --aux_w_only \
     --lambda_w 2.0 \
+    --gan_to_mse 0 \
     | tee "$save/train.log"
 }
 
