@@ -59,11 +59,12 @@ def _conds(xs, tgt):
 def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 mask_p=0.15, drop_p=0.4, lambda_loo=1.5, lambda_con=0.2,
                 lambda_nmf=0.1, lambda_w=0.3, alpha=0.5, gan_to_mse=0.1,
-                n_critic=1, lambda_gp=10.0, nmf_nonneg=True):
+                n_critic=1, lambda_gp=10.0, nmf_nonneg=True,
+                lambda_cell=0.0, self_weight=10.0):
     model.train()
     for D in critics.values():
         D.train()
-    sums = {"total": 0.0, "recon": 0.0, "loo": 0.0, "con": 0.0, "nmf": 0.0,
+    sums = {"total": 0.0, "recon": 0.0, "loo": 0.0, "cell": 0.0, "con": 0.0, "nmf": 0.0,
             "w": 0.0, "wgan": 0.0, "D": 0.0, "wcorr": 0.0}
     n = 0
     n_w_all = 0
@@ -140,6 +141,23 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 az, bz = wp - wp.mean(0), wr - wr.mean(0)
                 den = (az.pow(2).sum(0) * bz.pow(2).sum(0)).sqrt().clamp_min(1e-8)
                 sums["wcorr"] += float((az * bz).sum(0).div(den).mean().item())
+        # 칸 결측 항. 이게 없으면 두 체제 중 블록만 학습되고, 칸 경로(자기 은닉 +
+        # 융합 혼합)는 추론에서 처음 쓰인다. 제목이 Hybrid 인데 손실은 한쪽만
+        # 보고 있던 자리다. lambda_cell=0 이면 예전 학습과 완전히 같다.
+        closs_cell, n_c = rloss.new_zeros(()), 0
+        if lambda_cell > 0:
+            for m in MODS:
+                if m not in present_xs or not present[m].any():
+                    continue
+                masked = present[m].view(-1, 1) & extra[m]
+                if not masked.any():
+                    continue
+                hat_c = model.mixed_reconstruct(present_xs, present, m,
+                                                self_weight=self_weight)
+                closs_cell = closs_cell + mse_valid(hat_c, xs[m], masked)
+                n_c += 1
+            closs_cell = closs_cell / max(n_c, 1)
+
         lloss = lloss / max(n_l, 1) if n_l else rloss.new_zeros(())
         wloss = wloss / max(n_w, 1) if n_w else wloss
 
@@ -171,7 +189,8 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
                 target = gan_to_mse * (rloss + lloss).detach().abs()
                 g_wgan = (target / g_wgan.detach().abs().clamp_min(1e-8)) * g_wgan
 
-        loss = (rloss + lambda_loo * lloss + lambda_con * closs
+        loss = (rloss + lambda_loo * lloss + lambda_cell * closs_cell
+                + lambda_con * closs
                 + lambda_nmf * nloss + lambda_w * wloss + g_wgan)
         opt_g.zero_grad()
         loss.backward()
@@ -179,6 +198,7 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
         sums["total"] += float(loss.item())
         sums["recon"] += float(rloss.item())
         sums["loo"] += float(lloss.item())
+        sums["cell"] += float(closs_cell.item())
         sums["con"] += float(closs.item())
         sums["nmf"] += float(nloss.item())
         sums["w"] += float(wloss.item())
@@ -204,6 +224,30 @@ def block_zrmse(model, ds, device):
         hat = predict_nmf_tf(model, tabs, device, missing=tgt)
         sel = obs[tgt]
         per[tgt] = float(np.sqrt(np.mean((tabs[tgt][sel] - hat[tgt][sel]) ** 2))) if sel.any() \
+            else float("nan")
+    per["avg"] = float(np.nanmean([per[t] for t in MODS]))
+    return per
+
+
+@torch.no_grad()
+def cell_zrmse(model, ds, device, rate=0.3, seed=0, self_weight=10.0):
+    """칸 결측 val 지표. 관측된 칸의 일부를 가리고 자기+융합 혼합으로 복원한다.
+
+    블록 지표(block_zrmse)는 오믹스를 통째로 가리므로 칸 경로를 전혀 쓰지 않는다.
+    칸 손실을 켜고 학습하면서 블록 지표로 체크포인트를 고르면 실험이 어긋난다.
+    가리는 자리는 시드로 고정해 에폭 간 비교가 흔들리지 않게 한다.
+    """
+    tabs = {m: getattr(ds, {"protein": "prot_f", "rna": "rna_f", "methyl": "methy_f"}[m]) for m in MODS}
+    obs = {m: getattr(ds, {"protein": "m_prot", "rna": "m_rna", "methyl": "m_methy"}[m]) < 0.5
+           for m in MODS}
+    rng = np.random.default_rng(seed)
+    hide = {m: (rng.random(tabs[m].shape) < rate) & obs[m] for m in MODS}
+    tabs_in = {m: np.where(hide[m], 0.0, tabs[m]).astype(np.float32) for m in MODS}
+    hat = predict_nmf_tf(model, tabs_in, device, missing=None, self_weight=self_weight)
+    per = {}
+    for m in MODS:
+        sel = hide[m]
+        per[m] = float(np.sqrt(np.mean((tabs[m][sel] - hat[m][sel]) ** 2))) if sel.any() \
             else float("nan")
     per["avg"] = float(np.nanmean([per[t] for t in MODS]))
     return per
@@ -263,6 +307,16 @@ def main():
     ap.add_argument("--alpha", type=float, default=0.5,
                     help="재구성에서 마스킹 칸 MSE 비중")
     # --- 5안 ---
+    ap.add_argument("--select_on", choices=["block", "cell"], default="block",
+                    help="조기 종료·체크포인트 선택 기준. 칸 경로를 재는 실험이면 cell 로 "
+                         "둬야 한다. 블록으로 고르면 칸 학습과 선택이 어긋난다")
+    ap.add_argument("--cell_rate", type=float, default=0.3,
+                    help="칸 val 지표에서 가리는 비율")
+    ap.add_argument("--lambda_cell", type=float, default=0.0,
+                    help="칸 결측 손실 가중. 0이면 예전과 같고, 칸 경로는 학습되지 않은 채 "
+                         "추론에서만 쓰인다. cell_attn / content_tokens 를 재려면 켜야 한다")
+    ap.add_argument("--self_weight", type=float, default=10.0,
+                    help="칸 결측에서 자기 은닉에 주는 가중. 학습과 추론이 같아야 한다")
     ap.add_argument("--split_latent", action="store_true",
                     help="은닉을 [공유|전용]으로 쪼개고, 오믹스를 건너가는 융합에는 공유 절반만 "
                          "넣는다. 전용 절반은 자기 재구성과 칸 혼합에서만 기울기를 받는다")
@@ -389,7 +443,8 @@ def main():
           f"cell={'mean' if args.cell_mean else 'attn'} content_tokens={args.content_tokens} "
           f"detach_w_head={args.detach_w_head}")
     print(f"loss λ: loo={args.lambda_loo} con={args.lambda_con} nmf={args.lambda_nmf} "
-          f"w={args.lambda_w}  mask_p={args.mask_p} drop_p={args.drop_p} alpha={args.alpha}  "
+          f"w={args.lambda_w} cell={args.lambda_cell}  "
+          f"mask_p={args.mask_p} drop_p={args.drop_p} alpha={args.alpha}  "
           f"(로그 recon/loo/con/nmf/w 는 가중 전)")
     best, pat = float("inf"), 0
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -400,11 +455,16 @@ def main():
                          lambda_loo=args.lambda_loo, lambda_con=args.lambda_con,
                          lambda_nmf=args.lambda_nmf, lambda_w=args.lambda_w,
                          alpha=args.alpha, gan_to_mse=args.gan_to_mse,
-                         nmf_nonneg=args.nmf_nonneg)
+                         nmf_nonneg=args.nmf_nonneg,
+                         lambda_cell=args.lambda_cell, self_weight=args.self_weight)
         met = block_zrmse(model, val_ds, device)
+        cell_met = (cell_zrmse(model, val_ds, device, rate=args.cell_rate,
+                               self_weight=args.self_weight)
+                    if args.select_on == "cell" else None)
+        score = cell_met["avg"] if cell_met is not None else met["avg"]
         mark = ""
-        if met["avg"] < best:
-            best, pat, mark = met["avg"], 0, " *"
+        if score < best:
+            best, pat, mark = score, 0, " *"
             torch.save({
                 "model": model.state_dict(), "dims": dims, "k": args.k,
                 "d_model": args.d_model, "n_heads": 4, "n_layers": args.n_layers,
@@ -427,6 +487,8 @@ def main():
                 "w_head_act": args.w_head_act,
                 "lambda_w": args.lambda_w,
                 "lambda_nmf": args.lambda_nmf,
+                "lambda_cell": args.lambda_cell,
+                "self_weight": args.self_weight,
                 "lambda_loo": args.lambda_loo,
                 "lambda_con": args.lambda_con,
                 "mask_p": args.mask_p,
@@ -435,20 +497,22 @@ def main():
                 "gan_to_mse": args.gan_to_mse,
                 "seed": args.seed,
                 "n_train": len(train_ds),
-                "epoch": ep, "val": met,
+                "epoch": ep, "val": met, "val_cell": cell_met,
+                "select_on": args.select_on,
             }, save_dir / "nmf_tf_best.ckpt")
         else:
             pat += 1
         print(f"ep {ep:03d} tot={tr['total']:.4f} recon={tr['recon']:.4f} "
-              f"loo={tr['loo']:.4f} con={tr['con']:.4f} nmf={tr['nmf']:.4f} "
+              f"loo={tr['loo']:.4f} cell={tr['cell']:.4f} con={tr['con']:.4f} nmf={tr['nmf']:.4f} "
               f"w={tr['w']:.4f} wcorr={tr['wcorr']:.3f} wgan={tr['wgan']:.4f} "
               f"gamma={model.gamma_log()}  "
               f"val zRMSE avg={met['avg']:.4f} "
-              f"P={met['protein']:.4f} R={met['rna']:.4f} M={met['methyl']:.4f}{mark}")
+              f"P={met['protein']:.4f} R={met['rna']:.4f} M={met['methyl']:.4f}"
+              + (f"  cell={cell_met['avg']:.4f}" if cell_met is not None else "") + mark)
         if ep > 15 and pat >= args.patience:
             print(f"early stop at {ep}")
             break
-    print(f"best val block zRMSE={best:.4f}  saved {save_dir / 'nmf_tf_best.ckpt'}")
+    print(f"best val {args.select_on} zRMSE={best:.4f}  saved {save_dir / 'nmf_tf_best.ckpt'}")
 
 
 if __name__ == "__main__":
