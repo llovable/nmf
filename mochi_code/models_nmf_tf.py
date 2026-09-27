@@ -120,12 +120,21 @@ class NMFTransformer(nn.Module):
         self.use_transformer = use_transformer
         self.mods = tuple(MODS)
         n_mods = len(self.mods)
+        # 모달리티별 전역 게이트(파라미터 3개). present인 모달리티에만 softmax로 정규화해
+        # mean_z 기준점을 균등 평균 대신 신뢰도 가중 평균으로 만든다.
+        self.mod_weights = nn.Parameter(torch.ones(n_mods))
+        self.mod_idx = {m: i for i, m in enumerate(self.mods)}
         self.proj_h = nn.ModuleDict({m: nn.Linear(HIDDEN[m], d_model) for m in self.mods})
         self.comp_emb = nn.Parameter(torch.randn(n_mods, k, d_model) * 0.02)
         self.mod_emb = nn.Parameter(torch.randn(n_mods, 1, d_model) * 0.02)
         self.h_emb = nn.Parameter(torch.randn(n_mods, 1, d_model) * 0.02)
         self.w_in = nn.Linear(1, d_model)
+        # 레거시 단일 query는 체크포인트 호환을 위해 유지한다.
         self.query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        # 타깃 오믹스별 query. LOO 복원 타깃에 따라 다른 retrieval 관점을 준다.
+        self.query_by_mod = nn.ParameterDict({
+            m: nn.Parameter(torch.randn(1, 1, d_model) * 0.02) for m in self.mods
+        })
         enc_layer = nn.TransformerEncoderLayer(
             d_model, n_heads, dim_feedforward=4 * d_model, dropout=pdrop,
             batch_first=True, activation="gelu", norm_first=True)
@@ -144,13 +153,16 @@ class NMFTransformer(nn.Module):
         ref = next(iter(hs.values()))
         acc = ref.new_zeros(ref.size(0), self.d_model)
         wsum = ref.new_zeros(ref.size(0), 1)
+        # 소프트맥스 게이트를 미리 계산해 스칼라 가중으로 사용한다.
+        w_gate = torch.softmax(self.mod_weights, dim=0)
         for m, h in hs.items():
             if m == skip:
                 continue
             present = keep[m].float().unsqueeze(-1)
-            acc = acc + self.proj_h[m](h) * present
-            wsum = wsum + present
-        return acc / wsum.clamp_min(1.0)
+            g = w_gate[self.mod_idx[m]]
+            acc = acc + self.proj_h[m](h) * present * g
+            wsum = wsum + present * g
+        return acc / wsum.clamp_min(1e-8)
 
     def _stack(self, hs: Dict[str, torch.Tensor], Ws: Dict[str, torch.Tensor],
                keep: Dict[str, torch.Tensor]):
@@ -179,7 +191,8 @@ class NMFTransformer(nn.Module):
         return tokens, pad
 
     def fused_z(self, hs: Dict[str, torch.Tensor], Ws: Dict[str, torch.Tensor],
-                keep: Dict[str, torch.Tensor], skip: Optional[str] = None) -> torch.Tensor:
+                keep: Dict[str, torch.Tensor], skip: Optional[str] = None,
+                target: Optional[str] = None) -> torch.Tensor:
         keep_use = dict(keep)
         if skip is not None:
             ref = next(iter(hs.values())) if hs else next(iter(Ws.values()))
@@ -189,7 +202,8 @@ class NMFTransformer(nn.Module):
             return z0
         tokens, pad = self._stack(hs, Ws, keep_use)
         memory = self.encoder(tokens, src_key_padding_mask=pad)
-        q = self.query.expand(tokens.size(0), -1, -1)
+        q_param = self.query_by_mod[target] if (target is not None and target in self.query_by_mod) else self.query
+        q = q_param.expand(tokens.size(0), -1, -1)
         attn_out, _ = self.attn(q, memory, memory, key_padding_mask=pad, need_weights=False)
         return self.ln(z0 + self.delta(attn_out.squeeze(1)))
 
@@ -356,7 +370,7 @@ class NMFTransformerMOCHI(nn.Module):
         hs = self.encode_h(xs_loo)
         Ws = self.encode_W(xs_loo)
         keep = {m: p.clone() for m, p in present.items() if m != target}
-        return self.fuse.fused_z(hs, Ws, keep, skip=target)
+        return self.fuse.fused_z(hs, Ws, keep, skip=target, target=target)
 
     def loo_hidden(self, xs: Dict[str, torch.Tensor], present: Dict[str, torch.Tensor],
                    target: str) -> torch.Tensor:
@@ -369,7 +383,7 @@ class NMFTransformerMOCHI(nn.Module):
         hs = self.encode_h(xs_loo)
         Ws = self.encode_W(xs_loo)
         keep = {m: p.clone() for m, p in present.items() if m != target}
-        z = self.fuse.fused_z(hs, Ws, keep, skip=target)
+        z = self.fuse.fused_z(hs, Ws, keep, skip=target, target=target)
         W = None
         if self.use_lowrank:
             if self.w_from_others:
@@ -511,7 +525,7 @@ def load_nmf_tf(path, device):
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if unexpected:
         raise RuntimeError(f"예상 밖 가중치: {unexpected}")
-    allowed = ("w_head.", "gamma", "w_from.")
+    allowed = ("w_head.", "gamma", "w_from.", "fuse.mod_weights", "fuse.query_by_mod.")
     stale = [k for k in missing if not (k.startswith(allowed) or k.endswith("w_mean"))]
     if stale:
         raise RuntimeError(f"빠진 가중치: {stale}")
