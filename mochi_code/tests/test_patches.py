@@ -32,7 +32,7 @@ def check(name, ok, detail=""):
 
 
 def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, w_head_act="relu",
-               add_residual=True, device="cpu"):
+               add_residual=True, device="cpu", **kw):
     rng = np.random.default_rng(0)
     toks = {}
     for m, d in dims.items():
@@ -42,7 +42,7 @@ def make_model(dims, k, gamma_init=0.3, gamma_nonneg=False, w_head_act="relu",
     return NMFTransformerMOCHI(dims, toks, k=k, d_model=32, n_layers=1,
                                gamma_init=gamma_init, gamma_nonneg=gamma_nonneg,
                                w_head_act=w_head_act,
-                               add_residual=add_residual).to(device)
+                               add_residual=add_residual, **kw).to(device)
 
 
 def test_a():
@@ -533,10 +533,99 @@ def test_j():
           f"max|diff|={float((ref - got).abs().max()):.2e}")
 
 
+def test_k():
+    """5안: 좌표 분리, 경로별 모듈 배치, 내용 담은 성분 토큰.
+
+    분리는 조용히 실패한다. 벡터를 반으로 자르기만 하고 기울기를 막지 않으면
+    인코더가 교차 신호를 전용 절반에 숨기고, 구조도의 분리는 이름만 남는다.
+    그래서 여기서는 '막혔다'를 기울기로 직접 잰다.
+    """
+    print("K) 5안 — 분리 · 경로 배치 · 성분 토큰")
+    dims, k, b = {"protein": 20, "rna": 40, "methyl": 30}, 6, 8
+    xs = {m: torch.randn(b, d) for m, d in dims.items()}
+    present = {m: torch.ones(b, dtype=torch.bool) for m in MODS}
+
+    def private_grad(split):
+        torch.manual_seed(3)
+        m = make_model(dims, k, add_residual=False, split_latent=split)
+        m.train()
+        m.zero_grad()
+        m.loo_reconstruct(xs, present, "rna").pow(2).mean().backward()
+        g = m.encoders["protein"].weight.grad          # [HIDDEN, d_in]
+        half = g.size(0) // 2
+        return float(g[half:].abs().max())
+
+    g_off, g_on = private_grad(False), private_grad(True)
+    check("분리 끔: 전용 절반이 블록 손실의 기울기를 받는다", g_off > 0, f"max|grad|={g_off:.3e}")
+    check("분리 켬: 전용 절반의 기울기가 정확히 0", g_on == 0.0, f"max|grad|={g_on:.1e}")
+
+    # 전용 절반이 죽은 건 아니다 — 자기 재구성은 여전히 쓴다
+    torch.manual_seed(3)
+    m = make_model(dims, k, add_residual=False, split_latent=True)
+    m.train(); m.zero_grad()
+    m.reconstruct_own(xs)["protein"].pow(2).mean().backward()
+    gp = m.encoders["protein"].weight.grad
+    half = gp.size(0) // 2
+    check("분리 켬: 자기 재구성은 전용 절반을 학습시킨다",
+          float(gp[half:].abs().max()) > 0, f"max|grad|={float(gp[half:].abs().max()):.3e}")
+
+    # 경로별 모듈 배치: 블록은 평균, 칸은 attention
+    torch.manual_seed(4)
+    m = make_model(dims, k, add_residual=False, block_attn=False, cell_attn=True)
+    m.eval()
+    with torch.no_grad():                      # delta가 0이면 경로 차이가 안 보인다
+        m.fuse.delta.weight.normal_(0, 0.5)
+        m.fuse.delta.bias.normal_(0, 0.1)
+    hs, Ws, keep, comp = m._fuse_inputs(xs, present, "rna")
+    z_mean = m.fuse.mean_z(hs, {**keep, "rna": torch.zeros(b, dtype=torch.bool)}, skip="rna")
+    z_block = m.fused_for(xs, present, "rna", path="block")
+    z_cell = m.fused_for(xs, present, "rna", path="cell")
+    check("블록 경로는 평균 융합과 같다", torch.allclose(z_block, z_mean, atol=1e-6),
+          f"max|diff|={float((z_block - z_mean).abs().max()):.2e}")
+    check("칸 경로는 attention을 거쳐 달라진다",
+          not torch.allclose(z_cell, z_mean, atol=1e-5),
+          f"max|diff|={float((z_cell - z_mean).abs().max()):.2e}")
+
+    # 내용 담은 성분 토큰
+    torch.manual_seed(5)
+    m = make_model(dims, k, add_residual=False, content_tokens=True)
+    m.eval()
+    Ws = m.encode_W(xs)
+    comp = m.component_tokens(xs, Ws)
+    check("성분 토큰 모양이 [B,k,d_model]", comp["rna"].shape == (b, k, m.d_model),
+          str(tuple(comp["rna"].shape)))
+    spread = float(comp["rna"].std(dim=1).mean())
+    check("성분마다 토큰이 다르다 (한 점으로 뭉치지 않음)", spread > 1e-4, f"성분 간 표준편차={spread:.3e}")
+    toks, pad = m.fuse._stack(
+        {mm: m.mask_specific(h) for mm, h in m.encode_h(xs).items()}, Ws,
+        {mm: present[mm] for mm in MODS}, comp=comp)
+    check("토큰 수 = h 3개 + 성분 3k개", toks.size(1) == 3 + 3 * k, f"{toks.size(1)}개")
+
+    # 묶으면 정보가 사라진다는 식을 코드로 고정한다
+    H = m.tokenizers["rna"].H
+    W = Ws["rna"]
+    parts = W.unsqueeze(-1) * H.unsqueeze(0)            # [B,k,d_in]
+    summed = m.encoders["rna"](parts.reshape(b * k, -1)).reshape(b, k, -1).sum(dim=1)
+    direct = m.encoders["rna"](parts.sum(dim=1)) + (k - 1) * m.encoders["rna"].bias
+    check("Σⱼ Linear(W[j]H[j]) = Linear(ΣⱼW[j]H[j]) + (k-1)b  — 묶으면 h 토큰과 상수 차이",
+          torch.allclose(summed, direct, atol=1e-4),
+          f"max|diff|={float((summed - direct).abs().max()):.2e}")
+
+    # 읽기 머리 detach
+    torch.manual_seed(6)
+    m = make_model(dims, k, add_residual=False, detach_w_head=True)
+    m.train(); m.zero_grad()
+    _, W_hat = m.loo_parts(xs, present, "rna")
+    W_hat.pow(2).mean().backward()
+    ge = m.encoders["protein"].weight.grad
+    check("detach된 읽기 머리는 인코더에 기울기를 주지 않는다",
+          ge is None or float(ge.abs().max()) == 0.0)
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
     test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h(); test_i()
-    test_j()
+    test_j(); test_k()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

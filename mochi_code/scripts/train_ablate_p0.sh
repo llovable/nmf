@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# 보고 앵커와 NMF 채널 대조군. 전부 GAN off, --aux_w_only --w_from_others.
-#   ctl_base : λ_w=2.0 λ_nmf=0.1  토큰 on   — 앵커
-#   w0       : λ_w=0   λ_nmf=0.1  토큰 on   — 계수 보조 손실만 제거
-#   nmf0     : λ_w=2.0 λ_nmf=0    토큰 on   — 출력단 NMF 정규화만 제거
-#   lw0_nmf0 : λ_w=0   λ_nmf=0    토큰 on   — 손실 두 채널 off, 토큰은 남음
-#   none     : λ_w=0   λ_nmf=0    토큰 off  — NMF 사전지식 전부 제거
+# 보고 앵커와 NMF 채널 대조군. 전부 GAN off, --w_from_others.
+# 앞 다섯은 --aux_w_only (디코더에 γWH를 더하지 않음):
+#   ctl_base   : λ_w=2.0 λ_nmf=0.1  토큰 on   — 앵커
+#   w0         : λ_w=0   λ_nmf=0.1  토큰 on   — 계수 보조 손실만 제거
+#   nmf0       : λ_w=2.0 λ_nmf=0    토큰 on   — 출력단 NMF 정규화만 제거
+#   lw0_nmf0   : λ_w=0   λ_nmf=0    토큰 on   — 손실 두 채널 off, 토큰은 남음
+#   none       : λ_w=0   λ_nmf=0    토큰 off  — NMF 사전지식 전부 제거
+# 뒤 둘은 잔차 on (--aux_w_only 없음). 원고의 핵심 비교는 "잔차 대 보조 손실"인데
+# aux 쪽만 있으면 절반이 빈다. 옛 잔차 숫자(ARI 0.252)는 gan_to_mse=0.1 런이라
+# GAN=0인 이 표와 같은 축에 놓을 수 없다:
+#   resid      : λ_w=2.0 λ_nmf=0.1  토큰 on   — ctl_base 와 짝. λ_nmf 맞춘 잔차 효과
+#   resid_nmf0 : λ_w=2.0 λ_nmf=0    토큰 on   — nmf0 와 짝. λ_nmf 없는 잔차 효과
 # 옛 results/current/lr_auxw/ 는 gan_to_mse 기본 0.1 런이라 은퇴.
 set -euo pipefail
 cd /home/dyan/nmf/mochi_code
@@ -17,11 +23,13 @@ train_one() {
   local cond=$1 cohort=$2 gpu=$3
   local extra=()
   case $cond in
-    ctl_base) extra=(--lambda_w 2.0 --lambda_nmf 0.1) ;;
-    w0) extra=(--lambda_w 0.0 --lambda_nmf 0.1) ;;
-    nmf0) extra=(--lambda_w 2.0 --lambda_nmf 0.0) ;;
-    lw0_nmf0) extra=(--lambda_w 0.0 --lambda_nmf 0.0) ;;
-    none) extra=(--lambda_w 0.0 --lambda_nmf 0.0 --no_nmf_tokens) ;;
+    ctl_base) extra=(--aux_w_only --lambda_w 2.0 --lambda_nmf 0.1) ;;
+    w0) extra=(--aux_w_only --lambda_w 0.0 --lambda_nmf 0.1) ;;
+    nmf0) extra=(--aux_w_only --lambda_w 2.0 --lambda_nmf 0.0) ;;
+    lw0_nmf0) extra=(--aux_w_only --lambda_w 0.0 --lambda_nmf 0.0) ;;
+    none) extra=(--aux_w_only --lambda_w 0.0 --lambda_nmf 0.0 --no_nmf_tokens) ;;
+    resid) extra=(--lambda_w 2.0 --lambda_nmf 0.1) ;;
+    resid_nmf0) extra=(--lambda_w 2.0 --lambda_nmf 0.0) ;;
     *) echo "unknown cond $cond" >&2; return 1 ;;
   esac
   local save=$ROOT/$cond/${cohort}_hybrid
@@ -32,7 +40,6 @@ train_one() {
     --save_dir "$save" \
     --gpu "$gpu" \
     --w_from_others \
-    --aux_w_only \
     --gan_to_mse 0 \
     "${extra[@]}" \
     | tee "$save/train.log"
@@ -64,14 +71,20 @@ run_cohort() {
   train_one nmf0 "$cohort" 0 &
   train_one lw0_nmf0 "$cohort" 1 &
   wait
-  train_one none "$cohort" 0
+  train_one none "$cohort" 0 &
+  train_one resid "$cohort" 1 &
+  wait
+  train_one resid_nmf0 "$cohort" 0
   eval_one ctl_base "$cohort" 0 &
   eval_one w0 "$cohort" 1 &
   wait
   eval_one nmf0 "$cohort" 0 &
   eval_one lw0_nmf0 "$cohort" 1 &
   wait
-  eval_one none "$cohort" 0
+  eval_one none "$cohort" 0 &
+  eval_one resid "$cohort" 1 &
+  wait
+  eval_one resid_nmf0 "$cohort" 0
 }
 
 mkdir -p "$ROOT"
@@ -82,3 +95,4 @@ run_cohort kirc
 echo "$(date) ALL DONE"
 echo "앵커: $ROOT/ctl_base  (λ_w=2.0 λ_nmf=0.1 tokens on gan_to_mse=0)"
 echo "대조: $ROOT/{w0,nmf0,lw0_nmf0,none}"
+echo "잔차: $ROOT/{resid,resid_nmf0}  (ctl_base / nmf0 와 각각 짝)"

@@ -261,6 +261,21 @@ def main():
                     help="오믹스 독립 드롭 확률. 평가 블록 결측은 나머지가 항상 둘 다 있다")
     ap.add_argument("--alpha", type=float, default=0.5,
                     help="재구성에서 마스킹 칸 MSE 비중")
+    # --- 5안 ---
+    ap.add_argument("--split_latent", action="store_true",
+                    help="은닉을 [공유|전용]으로 쪼개고, 오믹스를 건너가는 융합에는 공유 절반만 "
+                         "넣는다. 전용 절반은 자기 재구성과 칸 혼합에서만 기울기를 받는다")
+    ap.add_argument("--block_mean", action="store_true",
+                    help="블록 경로를 평균 융합으로. 이전 측정에서 블록은 평균이 앞섰다 "
+                         "(0.831 대 0.860)")
+    ap.add_argument("--cell_mean", action="store_true",
+                    help="칸 경로도 평균 융합으로. 경로 배치의 대조군용")
+    ap.add_argument("--content_tokens", action="store_true",
+                    help="성분 토큰을 계수 스칼라가 아니라 인코더(W[j]·H[j])로 만든다. "
+                         "기존 인코더를 재사용하므로 새 파라미터가 없다")
+    ap.add_argument("--detach_w_head", action="store_true",
+                    help="계수 읽기 머리의 기울기를 끊는다. 해석 출력이 재구성을 "
+                         "바꿀 수 없음이 구조로 보장된다")
     ap.add_argument("--ae_ckpt", default="",
                     help="phase1 AE 가중치(.pt). 있으면 70 epoch 사전학습을 건너뛴다. "
                          "λ_W 스윕처럼 본체만 다른 학습에 쓴다")
@@ -322,6 +337,11 @@ def main():
         freeze_protein_gamma=args.freeze_protein_gamma,
         add_residual=not args.aux_w_only,
         mlp_ae=args.mlp_ae,
+        split_latent=args.split_latent,
+        block_attn=not args.block_mean,
+        cell_attn=not args.cell_mean,
+        content_tokens=args.content_tokens,
+        detach_w_head=args.detach_w_head,
     ).to(device)
     for m in MODS:
         model.encoders[m].load_state_dict(encs[m].state_dict() if hasattr(encs[m], "state_dict") else encs[m])
@@ -364,6 +384,9 @@ def main():
     print(f"gamma: init={args.gamma_init} lr={args.gamma_lr} nonneg={args.gamma_nonneg}  "
           f"nmf_loss_nonneg={args.nmf_nonneg}  w_head={args.w_head_act}  "
           f"lambda_w={args.lambda_w} lambda_nmf={args.lambda_nmf}  gan_to_mse={args.gan_to_mse}")
+    print(f"5안: split_latent={args.split_latent} block={'mean' if args.block_mean else 'attn'} "
+          f"cell={'mean' if args.cell_mean else 'attn'} content_tokens={args.content_tokens} "
+          f"detach_w_head={args.detach_w_head}")
     print(f"loss λ: loo={args.lambda_loo} con={args.lambda_con} nmf={args.lambda_nmf} "
           f"w={args.lambda_w}  mask_p={args.mask_p} drop_p={args.drop_p} alpha={args.alpha}  "
           f"(로그 recon/loo/con/nmf/w 는 가중 전)")
@@ -390,6 +413,11 @@ def main():
                 "w_from_others": args.w_from_others,
                 "freeze_protein_gamma": args.freeze_protein_gamma,
                 "add_residual": not args.aux_w_only,
+                "split_latent": args.split_latent,
+                "block_attn": not args.block_mean,
+                "cell_attn": not args.cell_mean,
+                "content_tokens": args.content_tokens,
+                "detach_w_head": args.detach_w_head,
                 "mlp_ae": args.mlp_ae,
                 "gamma_nonneg": args.gamma_nonneg,
                 "gamma_init": args.gamma_init,
