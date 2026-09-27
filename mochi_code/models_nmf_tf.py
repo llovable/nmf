@@ -404,6 +404,16 @@ class NMFTransformerMOCHI(nn.Module):
         shared, private = h.split([d, h.size(-1) - d], dim=-1)
         return torch.cat([shared, shared.new_zeros(private.shape)], dim=-1)
 
+    def alignment_inputs(self, hs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """환자 정렬(대조) 손실이 볼 텐서. 공유 절반만 본다.
+
+        이게 없으면 분리가 새어 나간다. 대조 손실은 proj_h 를 통해 은닉 전체를
+        보므로, 마스크를 씌우지 않으면 전용 절반이 교차 오믹스 기울기를 받는다
+        (실측: split_latent=True 에서도 전용 절반에 max|grad| 1.7e-1).
+        그러면 인코더가 교차 신호를 전용 쪽에 숨길 수 있어 분리가 이름만 남는다.
+        """
+        return {m: self.fuse.proj_h[m](self.mask_specific(h)) for m, h in hs.items()}
+
     def component_tokens(self, xs: Dict[str, torch.Tensor],
                          Ws: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """성분마다 [B,k,d_model] 토큰. 내용은 W[j]·H[j]를 기존 인코더에 통과시킨 것.

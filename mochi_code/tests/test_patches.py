@@ -559,6 +559,21 @@ def test_k():
     check("분리 끔: 전용 절반이 블록 손실의 기울기를 받는다", g_off > 0, f"max|grad|={g_off:.3e}")
     check("분리 켬: 전용 절반의 기울기가 정확히 0", g_on == 0.0, f"max|grad|={g_on:.1e}")
 
+    # 대조 손실도 막혀야 한다. proj_h 가 은닉 전체를 보므로 마스크 없이는 샌다.
+    from models_shared import contrastive_loss as _closs
+
+    def align_grad(split):
+        torch.manual_seed(3)
+        m = make_model(dims, k, add_residual=False, split_latent=split)
+        m.train(); m.zero_grad()
+        _closs(m.alignment_inputs(m.encode_h(xs)), present).backward()
+        g = m.encoders["protein"].weight.grad
+        return float(g[g.size(0) // 2:].abs().max())
+
+    a_off, a_on = align_grad(False), align_grad(True)
+    check("분리 끔: 대조 손실이 전용 절반에 닿는다", a_off > 0, f"max|grad|={a_off:.3e}")
+    check("분리 켬: 대조 손실의 기울기도 정확히 0", a_on == 0.0, f"max|grad|={a_on:.1e}")
+
     # 전용 절반이 죽은 건 아니다 — 자기 재구성은 여전히 쓴다
     torch.manual_seed(3)
     m = make_model(dims, k, add_residual=False, split_latent=True)

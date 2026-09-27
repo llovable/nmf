@@ -157,7 +157,8 @@ def train_epoch(model, critics, bases, loader, opt_g, opt_d, device,
         nloss = nloss / max(n_n, 1) if n_n else nloss
 
         hs = model.encode_h(present_xs)
-        closs = contrastive_loss({m: model.fuse.proj_h[m](h) for m, h in hs.items()}, present)
+        # 대조 손실은 공유 절반만 본다. split_latent 가 꺼져 있으면 예전과 같다.
+        closs = contrastive_loss(model.alignment_inputs(hs), present)
 
         g_wgan = rloss.new_zeros(())
         if use_gan and hats:
