@@ -7,21 +7,31 @@
 블록 결측(오믹스 하나를 통째로 가림)으로 타깃을 채운 뒤, 그 채운 값이
 얼마나 믿을 만한지를 **정답을 안 보고** 추정할 수 있는지 본다. 신호 둘을 잰다.
 
-  coef  (4안) 성분 좌표 불일치.
-        채운 값의 실제 NMF 계수 W(x̂) 와, 융합이 예측한 계수 Ŵ 를 k차원에서 비교.
-        Ŵ 는 학습 중 참값의 계수를 맞추도록 감독됐으므로, 보간이 좋으면 둘이 같고
-        나쁘면 벌어진다. k차원이라 2000차원 원본보다 안정적이고, 어느 성분이
-        어긋났는지까지 지목할 수 있다.
+  coef  성분 좌표 불일치.  **단독 채택 금지.**
+        채운 값의 실제 계수 W(x̂) 와 융합이 예측한 계수 Ŵ 를 k차원에서 비교한다.
+        문제는 Ŵ 가 참 계수 W(x) 를 맞히도록 학습됐다는 점이다. 그 학습이 잘 됐다면
+            ‖W(x̂) − Ŵ‖ ≈ ‖W(x̂) − W(x)‖
+        이고, 오른쪽은 보간 오차를 NMF 좌표로 다시 쓴 것일 뿐이다. 그러면 실제
+        오차와의 상관은 검증이 아니라 동어반복이다. 이 스크립트는 그 가설을
+        직접 잰다 — coef 와 참 NMF 좌표 오차의 상관을 coef_tautology 로 낸다.
+        이 값이 높으면 coef 는 오차의 재표현이므로 근거로 쓰지 않는다.
 
-  cycle (2안) 특징 공간 순환 일치.
-        채운 x̂ 를 입력으로 되돌려 **관측된** 다른 오믹스를 역예측하고 참값과 비교.
-        정답을 아는 쪽으로 되짚는 것이라 감독이 필요 없다.
+  cycle 특징 공간 순환 일치.  **난이도 대조를 통과해야 함.**
+        채운 x̂ 를 입력으로 되돌려 **관측된** 다른 오믹스를 역예측하고 참값과 비교한다.
+        타깃 정답을 보지 않으므로 coef 같은 동어반복은 없다. 다만 맞추기 어려운
+        환자는 어느 방향으로 예측해도 오차가 크다. 그래서 상관이 있어도 "이 보간이
+        틀렸다"가 아니라 "이 환자가 어렵다"일 수 있다. 아래 두 대조를 통제한
+        편상관(partial)이 남아야 신호로 인정한다.
+
+  대조 dist_mean  관측 오믹스가 코호트 평균에서 떨어진 정도. 모델을 전혀 안 쓴다.
+       self_recon 관측 오믹스를 자기 자신으로 복원했을 때의 오차. 환자 난이도.
 
 판정
 ----
-신호와 실제 오차의 순위상관(Spearman)이 핵심이다. 상관이 있으면 "어떤 환자의
-어떤 보간값을 믿으면 안 되는지" 말할 수 있고, 없으면 4안의 토대가 무너진다.
-top20_recall 은 신호로 상위 20%를 걸러낼 때 진짜 최악 20%를 몇 % 잡는지다
+핵심은 raw Spearman 이 아니라 **편상관** partial_min 이다. cycle 이 두 난이도
+대조를 통제하고도 실제 오차를 가리키면, 그때만 "언제 믿으면 안 되는지"를
+말할 수 있다. raw 상관만 높고 편상관이 사라지면 그것은 환자 난이도를 잰 것이다.
+top20_recall 은 신호로 상위 20%를 거를 때 진짜 최악 20%를 몇 비율 잡는지다
 (무작위면 0.20).
 
 주의
@@ -72,6 +82,23 @@ def _pearson(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a[ok], b[ok])[0, 1])
 
 
+def _partial_spearman(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+    """c 를 통제한 a-b 순위 편상관. 난이도를 빼고도 신호가 남는지 본다."""
+    ok = np.isfinite(a) & np.isfinite(b) & np.isfinite(c)
+    if ok.sum() < 5:
+        return float("nan")
+    ra = pd.Series(a[ok]).rank().to_numpy()
+    rb = pd.Series(b[ok]).rank().to_numpy()
+    rc = pd.Series(c[ok]).rank().to_numpy()
+    if min(ra.std(), rb.std(), rc.std()) == 0:
+        return float("nan")
+    rab = np.corrcoef(ra, rb)[0, 1]
+    rac = np.corrcoef(ra, rc)[0, 1]
+    rbc = np.corrcoef(rb, rc)[0, 1]
+    den = np.sqrt(max(1e-12, (1 - rac ** 2) * (1 - rbc ** 2)))
+    return float((rab - rac * rbc) / den)
+
+
 def _top_recall(signal: np.ndarray, err: np.ndarray, frac=0.2) -> float:
     """신호로 상위 frac 을 걸렀을 때 실제 최악 frac 을 몇 비율 잡는가."""
     ok = np.isfinite(signal) & np.isfinite(err)
@@ -95,7 +122,8 @@ def measure(model, ds, device, batch_size=64):
 
     for tgt in MODS:
         err, d_coef, d_cycle = [], [], []
-        w_pred_all, w_hat_all = [], []
+        d_dist, d_self, nmf_err = [], [], []
+        w_pred_all = []
 
         for i in range(0, n, batch_size):
             sl = slice(i, i + batch_size)
@@ -121,15 +149,36 @@ def measure(model, ds, device, batch_size=64):
             cnt = keep.float().sum(dim=1).clamp_min(1.0)
             err.append(torch.sqrt(se.sum(dim=1) / cnt).cpu().numpy())
 
-            # 3) coef 신호: 채운 값의 실제 계수 vs 융합이 예측한 계수
+            # 3) coef 신호 + 동어반복 진단용 참 NMF 좌표 오차
+            #    w_true 는 진단에만 쓴다. 신호 계산에는 절대 들어가지 않는다.
             if w_pred is not None:
                 w_hat = model.tokenizers[tgt].encode(x_hat)
-                d = torch.linalg.norm(w_hat - w_pred, dim=1)
-                d_coef.append(d.cpu().numpy())
+                d_coef.append(torch.linalg.norm(w_hat - w_pred, dim=1).cpu().numpy())
+                w_true = model.tokenizers[tgt].encode(truth)
+                nmf_err.append(torch.linalg.norm(w_hat - w_true, dim=1).cpu().numpy())
                 w_pred_all.append(w_pred.cpu().numpy())
-                w_hat_all.append(w_hat.cpu().numpy())
             else:
                 d_coef.append(np.full(b, np.nan, dtype=np.float32))
+                nmf_err.append(np.full(b, np.nan, dtype=np.float32))
+
+            # 3b) 대조 1 — 관측 오믹스가 코호트 평균에서 떨어진 정도.
+            #     데이터는 train 통계로 z-정규화돼 있으므로 원점이 코호트 평균이다.
+            #     모델을 전혀 쓰지 않는 순수 난이도 대용치다.
+            dm = torch.zeros(b, device=device)
+            for m in xs:
+                dm = dm + torch.linalg.norm(xs[m], dim=1) / np.sqrt(xs[m].size(1))
+            d_dist.append((dm / max(len(xs), 1)).cpu().numpy())
+
+            # 3c) 대조 2 — 관측 오믹스를 자기 자신으로 복원한 오차.
+            own = model.reconstruct_own(xs)
+            sr = torch.zeros(b, device=device)
+            for m, rec in own.items():
+                tru_m = torch.from_numpy(np.asarray(tabs[m][sl], dtype=np.float32)).to(device)
+                keep_m = torch.from_numpy(np.asarray(obs[m][sl])).to(device)
+                se_m = ((rec - tru_m) ** 2) * keep_m.float()
+                cnt_m = keep_m.float().sum(dim=1).clamp_min(1.0)
+                sr = sr + torch.sqrt(se_m.sum(dim=1) / cnt_m)
+            d_self.append((sr / max(len(own), 1)).cpu().numpy())
 
             # 4) cycle 신호: 채운 값으로 관측된 다른 오믹스를 역예측
             cyc = torch.zeros(b, device=device)
@@ -157,6 +206,9 @@ def measure(model, ds, device, batch_size=64):
             "err": np.concatenate(err),
             "coef": np.concatenate(d_coef),
             "cycle": np.concatenate(d_cycle),
+            "dist_mean": np.concatenate(d_dist),
+            "self_recon": np.concatenate(d_self),
+            "_nmf_err": np.concatenate(nmf_err) if nmf_err else np.full(n, np.nan),
         }
         # 계수 머리가 상수인지 (lambda_w=0 이면 코호트 평균만 뱉는다)
         if w_pred_all:
@@ -206,13 +258,20 @@ def main():
         for tgt, r in res.items():
             spread = r["w_pred_spread"]
             constant_head = np.isfinite(spread) and spread < 1e-4
-            for sig in ("coef", "cycle"):
+            # coef 가 오차의 재표현인지: 참 NMF 좌표 오차와 얼마나 같은 순위인가
+            taut = _spearman(r["coef"], r["_nmf_err"])
+            for sig in ("cycle", "coef", "dist_mean", "self_recon"):
+                is_control = sig in ("dist_mean", "self_recon")
+                ctrls = [c for c in ("dist_mean", "self_recon") if c != sig]
+                parts = [_partial_spearman(r[sig], r["err"], r[c]) for c in ctrls]
+                pmin = float(np.nanmin(parts)) if np.any(np.isfinite(parts)) else float("nan")
                 rows.append({
                     "run": name, "split": args.split, "target": tgt, "signal": sig,
                     "n": int(np.isfinite(r["err"]).sum()),
                     "spearman": _spearman(r[sig], r["err"]),
-                    "pearson": _pearson(r[sig], r["err"]),
+                    "partial_min": float("nan") if is_control else pmin,
                     "top20_recall": _top_recall(r[sig], r["err"]),
+                    "coef_tautology": taut if sig == "coef" else float("nan"),
                     "err_mean": float(np.nanmean(r["err"])),
                     "lambda_w": lam_w,
                     "w_head_constant": bool(constant_head) if sig == "coef" else "",
@@ -222,6 +281,7 @@ def main():
                     "run": name, "split": args.split, "target": tgt,
                     "sample": np.arange(len(r["err"])),
                     "err": r["err"], "coef": r["coef"], "cycle": r["cycle"],
+                    "dist_mean": r["dist_mean"], "self_recon": r["self_recon"],
                 }))
             if constant_head:
                 print(f"  [주의] {tgt}: 계수 머리가 사실상 상수다 "
@@ -233,24 +293,43 @@ def main():
 
     df = pd.DataFrame(rows)
     pd.set_option("display.width", 200)
-    print("\n=== 상관 요약 (무작위면 spearman 0, top20_recall 0.20) ===")
-    print(df[["run", "target", "signal", "n", "spearman", "pearson",
-              "top20_recall", "err_mean"]].to_string(index=False,
-                                                     float_format=lambda v: f"{v:.3f}"))
+    print("\n=== 상관 요약 ===")
+    print("  spearman    신호와 실제 오차의 순위상관 (무작위 0)")
+    print("  partial_min 두 난이도 대조를 각각 통제한 편상관 중 낮은 쪽 — 이게 핵심")
+    print("  dist_mean / self_recon 행은 대조 자체의 상관. cycle 이 이보다 못하면 의미 없음\n")
+    print(df[["run", "target", "signal", "n", "spearman", "partial_min",
+              "top20_recall", "err_mean"]].to_string(
+                  index=False, na_rep="-", float_format=lambda v: f"{v:.3f}"))
 
     print("\n=== 판정 ===")
     for (run, sig), g in df.groupby(["run", "signal"]):
         sp = g["spearman"].mean()
         rc = g["top20_recall"].mean()
-        if not np.isfinite(sp):
+        if sig in ("dist_mean", "self_recon"):
+            print(f"  {run:12s} {sig:10s} 평균 spearman={sp:+.3f}  (대조 기준선)")
+            continue
+        if sig == "coef":
+            taut = g["coef_tautology"].mean()
+            const = any(g["w_head_constant"] == True)  # noqa: E712
+            if const:
+                note = "계수 머리가 상수 — 검증 신호 아님"
+            elif np.isfinite(taut) and taut >= 0.7:
+                note = f"참 NMF 오차와 순위상관 {taut:+.2f} — 오차의 재표현, 근거로 쓰지 말 것"
+            else:
+                note = f"참 NMF 오차와 순위상관 {taut:+.2f} — 동어반복 여지 낮음, 그래도 단독 채택 금지"
+            print(f"  {run:12s} {sig:10s} 평균 spearman={sp:+.3f}  →  {note}")
+            continue
+        pm = g["partial_min"].mean()
+        if not np.isfinite(pm):
             verdict = "계산 불가"
-        elif sp >= 0.4:
-            verdict = "강한 신호 — 채택"
-        elif sp >= 0.2:
-            verdict = "약한 신호 — 코호트 확인 필요"
+        elif pm >= 0.30:
+            verdict = "난이도를 빼고도 신호가 남음 — 보강 문장으로 채택"
+        elif pm >= 0.15:
+            verdict = "약함 — 코호트 셋 모두에서 같은 방향인지 확인 필요"
         else:
-            verdict = "신호 없음 — 이 경로 기각"
-        print(f"  {run:12s} {sig:6s} 평균 spearman={sp:+.3f}  top20_recall={rc:.3f}  →  {verdict}")
+            verdict = "난이도로 설명됨 — 신호 아님, 보강 없이 닫을 것"
+        print(f"  {run:12s} {sig:10s} 평균 spearman={sp:+.3f}  편상관={pm:+.3f}  "
+              f"top20_recall={rc:.3f}  →  {verdict}")
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
