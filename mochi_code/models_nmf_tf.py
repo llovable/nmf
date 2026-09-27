@@ -129,7 +129,11 @@ class NMFTransformer(nn.Module):
         self.mod_emb = nn.Parameter(torch.randn(n_mods, 1, d_model) * 0.02)
         self.h_emb = nn.Parameter(torch.randn(n_mods, 1, d_model) * 0.02)
         self.w_in = nn.Linear(1, d_model)
-        # 레거시 단일 query는 체크포인트 호환을 위해 유지한다.
+        # 레거시 단일 query. 지금은 어떤 경로도 이걸 읽지 않는다(모든 fused_z
+        # 호출이 target을 넘긴다). 남겨두는 이유는 둘이다. 옛 ckpt가
+        # load_state_dict에서 unexpected로 걸리지 않게 하고, load_nmf_tf가
+        # 이 값을 query_by_mod의 시드로 쓴다. 파라미터만 남겨서는 호환이 되지
+        # 않는다 — 시드 복사가 실제 호환 장치다.
         self.query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         # 타깃 오믹스별 query. LOO 복원 타깃에 따라 다른 retrieval 관점을 준다.
         self.query_by_mod = nn.ParameterDict({
@@ -525,6 +529,16 @@ def load_nmf_tf(path, device):
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if unexpected:
         raise RuntimeError(f"예상 밖 가중치: {unexpected}")
+    # 타깃별 query가 없는 ckpt는 단일 query로 학습된 모델이다. 그대로 두면
+    # query_by_mod가 randn 초기값으로 남아 LOO retrieval이 조용히 달라진다
+    # (실측: 융합 출력 max|diff| 8.6e-2). 학습된 query를 모든 타깃에 복사해
+    # 옛 동작을 정확히 재현한다. mod_weights는 ones 초기값의 softmax가 균등이라
+    # 옛 균등 평균과 이미 같으므로 손대지 않는다.
+    if "fuse.query" in sd and any(k.startswith("fuse.query_by_mod.") for k in missing):
+        with torch.no_grad():
+            for mod in model.fuse.query_by_mod:
+                model.fuse.query_by_mod[mod].copy_(sd["fuse.query"])
+        print("옛 ckpt: 단일 query를 타깃별 query로 복사했다")
     allowed = ("w_head.", "gamma", "w_from.", "fuse.mod_weights", "fuse.query_by_mod.")
     stale = [k for k in missing if not (k.startswith(allowed) or k.endswith("w_mean"))]
     if stale:

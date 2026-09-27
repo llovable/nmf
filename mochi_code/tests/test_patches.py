@@ -457,9 +457,86 @@ def test_i():
         check("로드된 aux_w 모델의 gamma_log는 unused", loaded.gamma_log() == "unused")
 
 
+def test_j():
+    """7dfbf25의 융합 게이트·타깃별 query가 옛 체크포인트를 깨지 않는지.
+
+    mod_weights=ones는 softmax가 균등이라 옛 균등 평균과 같아야 하고,
+    query_by_mod가 없는 옛 ckpt는 학습된 단일 query를 물려받아야 한다.
+    물려받지 않으면 randn 초기값이 남아 LOO retrieval이 조용히 달라진다.
+
+    주의: fuse.delta는 zeros 초기화라 delta(attn)=0이 되어 query가 출력에
+    전혀 반영되지 않는다. query 회귀를 보려면 delta를 먼저 흔들어야 한다.
+    """
+    import tempfile
+    from models_nmf_tf import load_nmf_tf
+    print("J) 융합 게이트 / 타깃별 query 체크포인트 호환")
+    dims = {"protein": 20, "rna": 40, "methyl": 30}
+    k, b = 6, 12
+    xs = {mod: torch.randn(b, d) for mod, d in dims.items()}
+    present = {mod: torch.ones(b, dtype=torch.bool) for mod in dims}
+
+    # 1) 기본 게이트는 옛 균등 평균과 수치적으로 같아야 한다.
+    m0 = make_model(dims, k)
+    m0.eval()
+    hs = m0.encode_h(xs)
+    z0 = m0.fuse.mean_z(hs, present)
+    manual = sum(m0.fuse.proj_h[mod](hs[mod]) for mod in hs) / len(hs)
+    check("mod_weights=ones는 균등 평균과 동일",
+          torch.allclose(z0, manual, atol=1e-6),
+          f"max|diff|={float((z0 - manual).abs().max()):.2e}")
+
+    # 게이트가 실제로 작동하는지 (상수 함수가 아님)
+    with torch.no_grad():
+        m0.fuse.mod_weights.copy_(torch.tensor([3.0, 0.0, 0.0]))
+    z_skew = m0.fuse.mean_z(hs, present)
+    check("mod_weights를 기울이면 기준점이 바뀐다",
+          not torch.allclose(z_skew, manual, atol=1e-4))
+
+    # 2) 옛 ckpt: query_by_mod / mod_weights 키가 없는 상태.
+    torch.manual_seed(7)
+    a = make_model(dims, k)
+    a.eval()
+    with torch.no_grad():
+        # delta가 0이면 query가 출력에 안 보여서 회귀가 숨는다.
+        a.fuse.delta.weight.normal_(0, 0.5)
+        a.fuse.delta.bias.normal_(0, 0.1)
+        a.fuse.query.normal_(0, 1.0)
+
+    tgt = "rna"
+    xs_loo = {mod: xs[mod] for mod in dims if mod != tgt}
+    keep = {mod: present[mod].clone() for mod in xs_loo}
+    ref = a.fuse.fused_z(a.encode_h(xs_loo), a.encode_W(xs_loo), keep,
+                         skip=tgt, target=None)          # 레거시 단일 query 경로
+
+    with tempfile.TemporaryDirectory() as td:
+        ck = Path(td) / "legacy.ckpt"
+        sd = {key: val for key, val in a.state_dict().items()
+              if not key.startswith("fuse.query_by_mod.") and key != "fuse.mod_weights"}
+        torch.save({
+            "model": sd, "dims": dims, "k": k,
+            "d_model": 32, "n_heads": 4, "n_layers": 1,
+            "use_nmf_tokens": True, "use_transformer": True, "use_lowrank": True,
+            "add_residual": True, "mlp_ae": False, "w_from_others": False,
+            "w_head_act": "relu",
+        }, ck)
+        loaded = load_nmf_tf(ck, "cpu")
+
+    check("옛 ckpt의 query가 모든 타깃 query로 복사된다",
+          all(torch.allclose(loaded.fuse.query_by_mod[mod], a.fuse.query, atol=0)
+              for mod in loaded.fuse.query_by_mod))
+
+    keep2 = {mod: present[mod].clone() for mod in xs_loo}
+    got = loaded.fuse.fused_z(loaded.encode_h(xs_loo), loaded.encode_W(xs_loo), keep2,
+                              skip=tgt, target=tgt)      # 새 타깃별 query 경로
+    check("옛 ckpt의 LOO 융합 출력이 그대로 재현된다",
+          torch.allclose(ref, got, atol=1e-6),
+          f"max|diff|={float((ref - got).abs().max()):.2e}")
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
     test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h(); test_i()
+    test_j()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))
