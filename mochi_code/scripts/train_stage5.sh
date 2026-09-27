@@ -53,15 +53,24 @@ for coh in $COHORTS; do
     echo "skip $coh: $DATA 없음"; continue
   fi
   for sd in $SEEDS; do
+    # phase1 AE 는 (코호트, 시드)마다 한 번만 학습하고 네 단계가 공유한다.
+    # 단계마다 새로 학습하면 phase1 분산이 단계 간 차이로 새어 귀속이 흐려진다.
+    # split_latent 는 융합 경로에서만 작동하므로 오믹스별 AE 는 네 단계가 같다.
+    AE="$RES/s0/${coh}_s${sd}/ae_phase1.pt"
     for st in s0 s1 s2 s3; do
       dir="$RES/${st}/${coh}_s${sd}"
       if [[ -f "$dir/nmf_tf_best.ckpt" ]]; then
         echo "skip $st $coh seed$sd (ckpt exists)"; continue
       fi
       mkdir -p "$dir"
+      reuse=()
+      if [[ "$st" != "s0" ]]; then
+        [[ -f "$AE" ]] || { echo "phase1 AE 없음: $AE (s0 부터 돌려야 합니다)"; exit 1; }
+        reuse=(--ae_ckpt "$AE")
+      fi
       echo "===== $st $coh seed=$sd ====="
       # shellcheck disable=SC2046
-      "$PY" -u train_nmf_tf.py "${COMMON[@]}" $(stage_args "$st") \
+      "$PY" -u train_nmf_tf.py "${COMMON[@]}" $(stage_args "$st") "${reuse[@]}" \
         --data_dir "$DATA" --save_dir "$dir" --seed "$sd" 2>&1 | tee "$dir/train.log"
     done
   done
