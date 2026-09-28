@@ -12,11 +12,27 @@ baselines/      공식 OmicsNMF, OmiTrans, MIMIR (비교군, 수정하지 않음
 archive/        예전 파이프라인, 노트북, 툴킷
 ```
 
+학습은 **NVIDIA GPU가 있는 리눅스/윈도우**에서만 합니다. MacBook(에어/프로, Apple Silicon)에는 CUDA가 없습니다. 맥에서 `cu124` 인덱스로 torch를 받으면 패키지를 찾지 못합니다.
+
+맥에서는 데이터만 받아도 됩니다. 학습은 NVIDIA 머신에서 이어서 합니다.
+
 ```bash
-source /home/dyan/nmf/.nmf/bin/activate
+git clone https://github.com/llovable/nmf.git
+cd nmf
+git checkout cursor/align-manuscript-with-lowrank-path-db76
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+# 맥: torch 설치하지 말 것. fetch만 가능.
+# NVIDIA 머신: https://pytorch.org 에서 CUDA 휠. 예
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+
 cd mochi_code
-python train_nmf_tf.py --gpu 0
-python paper/figures/plot_pathway_knockout.py
+bash scripts/fetch_brca.sh
+# 아래는 nvidia-smi 가 GPU를 찍을 때만
+bash scripts/run_next_experiments.sh
 ```
 
 그림 1은 `mochi_code/paper/figures/fig1_pathway_knockout.pdf`입니다.

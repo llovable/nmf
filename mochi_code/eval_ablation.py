@@ -54,6 +54,10 @@ def main():
     ap.add_argument("--out_dir", default="/home/dyan/nmf/mochi_code/results/current/gate_ablate")
     ap.add_argument("--runs", nargs="+", default=[
         "full=/home/dyan/nmf/mochi_code/results/current/gate_nmf_tf_h/nmf_tf_best.ckpt",
+        # 같은 가중치에서 저랭크 잔차만 끈 녹아웃. paired 비교라 학습 시드 변동이
+        # 상쇄되므로, 따로 학습한 아래 ablation들보다 훨씬 강한 증거다.
+        # 그림 1 Panel C의 Δz-RMSE가 여기서 나온다.
+        "knockout=/home/dyan/nmf/mochi_code/results/current/gate_nmf_tf_h/nmf_tf_best.ckpt=gamma0",
         "nogan=/home/dyan/nmf/mochi_code/results/current/gate_ablate_nogan/nmf_tf_best.ckpt",
         "mean=/home/dyan/nmf/mochi_code/results/current/gate_ablate_mean/nmf_tf_best.ckpt",
         "nonmf=/home/dyan/nmf/mochi_code/results/current/gate_ablate_nonmf/nmf_tf_best.ckpt",
@@ -70,13 +74,23 @@ def main():
 
     rows = []
     for spec in args.runs:
-        name, path = spec.split("=", 1)
+        # name=path 또는 name=path=gamma0 (eval_biology.py와 같은 규약).
+        # gamma0이면 같은 가중치로 저랭크 잔차만 꺼서 기여도를 녹아웃한다.
+        parts = spec.split("=")
+        if len(parts) < 2:
+            raise SystemExit(f"--runs 형식 오류: {spec} (name=path 또는 name=path=gamma0)")
+        name, path = parts[0], parts[1]
+        knockout = len(parts) > 2 and parts[2] == "gamma0"
         ckpt = Path(path)
         if not ckpt.exists():
             print(f"skip {name}: {ckpt} 없음")
             continue
         model = load_nmf_tf(ckpt, device)
-        print(f"eval {name} {ckpt}")
+        if knockout:
+            # gamma.zero_()가 아니다. gamma_nonneg 모델에서는 softplus(0)=0.693이
+            # 되어 녹아웃이 아니라 게이트를 키운다.
+            model.set_lowrank(False)
+        print(f"eval {name} {ckpt}" + ("  [저랭크 녹아웃]" if knockout else ""))
         if name == "full":
             rows += eval_one("MOCHI", "self-w10", model, device, splits, self_weight=10.0)
             rows += eval_one("MOCHI", "self-w0", model, device, splits, self_weight=0.0)

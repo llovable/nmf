@@ -131,6 +131,10 @@ def main():
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--runs", nargs="+", default=[
         "MOCHI=/home/dyan/nmf/mochi_code/results/current/gate_nmf_tf_h/nmf_tf_best.ckpt",
+        # 같은 가중치에서 저랭크 잔차만 끈 녹아웃. 그림 1 Panel B가 이 행을 쓴다.
+        # 기본 실행에 넣어야 진폭(pathway_sd_ratio)과 함께 순서(pathway_r)에도
+        # 무슨 일이 일어나는지 매번 같이 나온다 — 둘 중 하나만 보고하면 안 된다.
+        "MOCHI-knockout=/home/dyan/nmf/mochi_code/results/current/gate_nmf_tf_h/nmf_tf_best.ckpt=gamma0",
         "MOCHI-nogan=/home/dyan/nmf/mochi_code/results/current/gate_ablate_nogan/nmf_tf_best.ckpt",
         "MOCHI-notf=/home/dyan/nmf/mochi_code/results/current/gate_ablate_mean/nmf_tf_best.ckpt",
         "MOCHI-nonmf=/home/dyan/nmf/mochi_code/results/current/gate_ablate_nonmf/nmf_tf_best.ckpt",
@@ -151,7 +155,9 @@ def main():
     pm["b"] = pm["id"].str.split(".").str[0]
     ens2sym = pm.drop_duplicates("b").set_index("b")["gene"]
     rna_sym = pd.Index([ens2sym.get(i.split(".")[0], None) for i in feat["rna"]])
-    gene_index = {g: i for i, g in enumerate(rna_sym) if g is not None}
+    # probeMap에 심볼이 비어 있거나 NaN이면 pandas가 float로 넣는다.
+    # 그대로 gene_index에 들어가면 성분 상위 유전자 정렬이 str/float 혼합으로 죽는다.
+    gene_index = {g: i for i, g in enumerate(rna_sym) if isinstance(g, str) and g}
     sets = load_gmt(args.gmt, set(gene_index))
     print(f"device={device} n_test={len(test)}  매핑 유전자={len(gene_index)}  경로={len(sets)}")
 
@@ -194,10 +200,12 @@ def main():
         if not Path(path).exists():
             continue
         mdl = load_nmf_tf(path, device)
-        # 세 번째 칸이 gamma0이면 추론 시 저랭크 잔차를 꺼서 기여도를 녹아웃한다.
+        # 세 번째 칸이 gamma0이면 저랭크 잔차를 끈다.
+        # gamma.zero_()는 gamma_nonneg에서 softplus(0)=0.693이 되어 녹아웃이 아니다.
         if len(parts) > 2 and parts[2] == "gamma0":
-            with torch.no_grad():
-                mdl.gamma.zero_()
+            if not mdl.add_residual:
+                print(f"{name}: add_residual=False 이므로 gamma0 녹아웃은 무연산")
+            mdl.set_lowrank(False)
         models[name] = mdl
 
     mimir = mimir_mv = None
@@ -328,7 +336,14 @@ def main():
         rows.append(rec)
         print(f"[methyl] {name} done")
 
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows)
+    df.to_csv(out / "biology.tsv", sep="\t", index=False, float_format="%.4f")
+    print(f"saved {out / 'biology.tsv'}")
+
     # ---- 고정 NMF 성분의 경로 과대표현 ----
+    # 표 10의 숫자는 위에서 이미 썼다. 성분 과대표현이 죽어도 본문 지표는 남긴다.
     comp_rows = []
     mochi = models.get("MOCHI")
     if mochi is not None:
@@ -337,7 +352,8 @@ def main():
         M = len(universe)
         for c in range(H.shape[0]):
             order = np.argsort(-H[c])
-            top = [rna_sym[i] for i in order if rna_sym[i] in universe][:TOP_GENES]
+            top = [rna_sym[i] for i in order if isinstance(rna_sym[i], str)
+                   and rna_sym[i] in universe][:TOP_GENES]
             top = set(top)
             best = None
             for pw, genes in sets.items():
@@ -347,18 +363,15 @@ def main():
                 p = hypergeom.sf(k - 1, M, len(genes), len(top))
                 if best is None or p < best[1]:
                     best = (pw, float(p), k)
+            names = sorted(str(x) for x in top)
             comp_rows.append({
                 "component": c,
-                "top_genes": ",".join(sorted(top)[:8]),
+                "top_genes": ",".join(names[:8]),
                 "pathway": best[0] if best else "",
                 "p": best[1] if best else np.nan,
                 "overlap": best[2] if best else 0,
             })
 
-    out = Path(args.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(rows)
-    df.to_csv(out / "biology.tsv", sep="\t", index=False, float_format="%.4f")
     if comp_rows:
         cdf = pd.DataFrame(comp_rows).sort_values("p")
         cdf.to_csv(out / "nmf_components.tsv", sep="\t", index=False, float_format="%.3g")
