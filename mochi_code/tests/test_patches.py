@@ -780,10 +780,97 @@ def test_l():
               f"rc={proc.returncode}")
 
 
+def test_m():
+    """생존 평가는 --runs 만으로 끝나고, 없는 옛 체크포인트는 건너뛴다."""
+    import gzip
+    import os
+    import subprocess
+    import tempfile
+
+    import pandas as pd
+
+    print("M) 생존 --runs 와 선택적 옛 모델")
+    code = Path(__file__).resolve().parent.parent
+    fetch = (code / "scripts" / "fetch_xena_cohort.sh").read_text()
+    check("생존 테이블을 임상 행렬과 따로 받는다",
+          "TCGA-${COHORT}.survival.tsv.gz" in fetch and "clinicalMatrix" in fetch)
+    root = subprocess.run(
+        ["bash", "-c", 'cd "$(dirname "$1")/../.." && pwd', "bash",
+         str(code / "scripts" / "fetch_xena_cohort.sh")],
+        capture_output=True, text=True)
+    check("받는 위치는 클론 루트", root.stdout.strip() == str(code.parent), root.stdout.strip())
+
+    dims = {"protein": 6, "rna": 8, "methyl": 7}
+    k = 4
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        data = base / "gate"
+        data.mkdir()
+        rng = np.random.default_rng(0)
+        counts = {"train": 36, "val": 20, "test": 40}
+        for split, n in counts.items():
+            _write_gate(data, split, n, dims, rng)
+        (data / "sample_split.tsv").write_text("sample\tsplit\n")
+        lines = ["sample\tOS.time\tOS"]
+        surv_rng = np.random.default_rng(1)
+        for split, n in counts.items():
+            for i in range(n):
+                lines.append(f"{split}{i}\t{float(surv_rng.uniform(1, 80)):.4f}\t{i % 2}")
+        surv = base / "survival.tsv.gz"
+        with gzip.open(surv, "wt") as f:
+            f.write("\n".join(lines) + "\n")
+        model = make_model(dims, k, add_residual=False, w_head_act="softplus",
+                           use_nmf_tokens=False, w_from_others=True)
+        ckpt = base / "nmf_tf_best.ckpt"
+        torch.save({
+            "model": model.state_dict(),
+            "dims": dims, "k": k, "d_model": 32, "n_heads": 4, "n_layers": 1,
+            "use_nmf_tokens": False, "use_transformer": True, "use_lowrank": True,
+            "gamma_nonneg": False, "w_head_act": "softplus", "w_from_others": True,
+            "add_residual": False, "mlp_ae": False, "self_weight": 10.0,
+            "split_latent": False, "block_attn": True, "cell_attn": True,
+            "content_tokens": False, "detach_w_head": False,
+        }, ckpt)
+        empty_official = base / "official"
+        empty_official.mkdir()
+        out = base / "surv_out"
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(code)
+        proc = subprocess.run(
+            [sys.executable, str(code / "eval_survival.py"),
+             "--data_dir", str(data), "--surv", str(surv),
+             "--out_dir", str(out), "--gpu", "0",
+             "--official_dir", str(empty_official),
+             "--v5_ckpt", str(base / "missing_v5.ckpt"),
+             "--v5_1to1", str(base / "missing_1to1.ckpt"),
+             "--runs", f"MOCHI={ckpt}", f"GONE={base / 'nope.ckpt'}"],
+            cwd=str(code), env=env, capture_output=True, text=True)
+        tail = (proc.stdout + "\n" + proc.stderr)[-1800:]
+        check("옛 체크포인트 없이도 eval_survival.py가 끝난다", proc.returncode == 0,
+              "" if proc.returncode == 0 else tail)
+        if proc.returncode == 0:
+            check("MOCHI 체크포인트가 올라간다", "불러옴 MOCHI" in proc.stdout)
+            check("없는 --runs 항목은 건너뛴다", "건너뜀] GONE" in proc.stdout)
+            check("옛 MOCHI-v5 둘을 건너뛴다",
+                  proc.stdout.count("[건너뜀] MOCHI-v5") == 2)
+            check("공식 구현 둘을 건너뛴다",
+                  "OmicsNMF-official" in proc.stdout and "OmiTrans-official" in proc.stdout
+                  and "불러옴 OmicsNMF" not in proc.stdout)
+            check("비교 대상은 mean·TOBMI·Ridge·MOCHI 여섯",
+                  "비교 대상 6개: mean, TOBMI-1to1, TOBMI-2to1, Ridge-1to1, Ridge-2to1, MOCHI"
+                  in proc.stdout)
+            df = pd.read_csv(out / "survival.tsv", sep="\t")
+            sub = df[(df["eval_set"] == "test") & (df["missing"] == "missing-protein")
+                     & (df["method"] == "MOCHI")]
+            cidx = float(sub["c_index"].iloc[0]) if len(sub) else float("nan")
+            check("MOCHI C-index가 0과 1 사이", 0.0 < cidx < 1.0, f"C={cidx:.4f}")
+            check("난수 생존은 0.5 근처여도 된다", abs(cidx - 0.5) < 0.35, f"C={cidx:.4f}")
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
     test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h(); test_i()
-    test_j(); test_k(); test_l()
+    test_j(); test_k(); test_l(); test_m()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

@@ -22,6 +22,7 @@ git checkout cursor/fix-runbook-commands-a549
 git pull --ff-only origin cursor/fix-runbook-commands-a549
 git log --oneline -1
 source /home/dyan/nmf/.nmf/bin/activate
+python -c "import lifelines" 2>/dev/null || pip install 'lifelines>=0.27.0'
 cd mochi_code && python tests/test_patches.py
 ```
 
@@ -188,8 +189,9 @@ GPU=0 bash scripts/train_nsweep.sh 2>&1 | tee ~/task4.log
 ### 왜
 
 지금 생물학 쪽 지표가 "환자 묶음 정확도" 하나뿐인데 **거기서는 기존 방법에
-집니다.** 다른 축에서 하나라도 서면 논문이 훨씬 좋아지고, 안 서면 그
-사실을 알고 쓰는 게 낫습니다.
+집니다.** 생존 예측은 그 다음 축입니다. 정확도에서는 이미 졌더라도 채운
+값이 예후를 보존하면, "정확도는 뒤져도 임상적으로 의미 있는 구조를
+보존한다"가 됩니다. 그 문장은 순환 논증이 아닙니다.
 
 ### 명령
 
@@ -207,9 +209,42 @@ python eval_downstream.py \
   2>&1 | tee ~/task5.log
 ```
 
-> **생존 분석(`eval_survival.py`)은 지금 옛 체크포인트 경로에 고정돼 있어
-> 그대로는 안 돕니다.** 손대야 하니 이번에는 건너뛰고, 하위 과제 결과를
-> 먼저 보내주세요. 필요하면 그때 고치겠습니다.
+그다음 생존 분석입니다. `--runs` 는 하위 과제와 같은 `이름=경로` 형식이고,
+몇 개든 넣을 수 있습니다. 타깃 오믹스를 통째로 가린 뒤 그 체크포인트로
+복원하고, 채운 행렬로 생존을 예측합니다.
+
+생존 테이블은 임상 행렬과 다른 파일입니다. 없으면 먼저 받으세요.
+이미 있는 파일은 건너뜁니다.
+
+```bash
+cd /home/dyan/nmf/mochi_code
+bash scripts/fetch_xena_cohort.sh BRCA
+```
+
+```bash
+source /home/dyan/nmf/.nmf/bin/activate
+python eval_survival.py \
+  --data_dir processed_data/gate_brca \
+  --surv processed_data/clinical/TCGA-BRCA.survival.tsv.gz \
+  --out_dir results/current/surv_final --gpu 0 \
+  --runs "MOCHI=results/current/lr_ctl/none/brca_hybrid/nmf_tf_best.ckpt" \
+  2>&1 | tee -a ~/task5.log
+```
+
+> 작업 3을 먼저 돌리셨다면 체크포인트는
+> `results/current/lr_ctl/none/brca_s0/nmf_tf_best.ckpt` 입니다.
+
+옛 비교 모델 넷(MOCHI-v5 1→1, MOCHI-v5 2→1, 공식 OmicsNMF, 공식 OmiTrans)은
+**파일이 있을 때만** 쓰고 없으면 건너뜁니다. 그래서 그 파일이 없어도
+`mean` / `TOBMI` / `Ridge` / `MOCHI` 는 돕니다. 맨 윗줄의
+`비교 대상 N개:` 에서 확인하시면 됩니다.
+
+### 보는 곳
+
+`C=` 값이 C-index 입니다. **0.5면 무작위**이고, 높을수록 생존 예측이
+잘 되는 것입니다. `MOCHI` 줄이 `mean`·`Ridge` 보다 높으면, 채운 값이
+임상적으로 의미 있는 구조를 보존한다는 뜻입니다. 정확도에서 지더라도
+이 축에서 이기면 논문이 훨씬 좋아집니다.
 
 ---
 
@@ -221,6 +256,7 @@ results/current/lr_stage5c/cell_rate.tsv
 results/current/baselines_*.tsv
 results/current/lr_ctl/*/*_s*/train.log
 results/current/lr_nsweep/*/*/train.log
+results/current/surv_final/survival.tsv
 ```
 
 각 로그 끝의 **요약표만 먼저 붙여주셔도** 판단은 가능합니다.
@@ -234,6 +270,8 @@ results/current/lr_nsweep/*/*/train.log
 | `git checkout` 또는 `git pull` 이 거부됨 | 로컬 수정이 남아 있습니다. `git stash` 후 다시 |
 | 검증(`test_patches.py`) 실패 | **돌리지 말고 알려주세요** |
 | `빠진 가중치` / `예상 밖 가중치` | 코드가 옛 버전입니다. 0번을 다시 확인 |
+| `No module named lifelines` | `pip install 'lifelines>=0.27.0'` 후 작업 5만 다시 |
+| 작업 5 로그의 `[건너뜀] MOCHI-v5` / `OmicsNMF` | 정상입니다. 옛 파일이 없는 것이고 mean·TOBMI·Ridge·MOCHI는 계속 돕니다 |
 | `경로 없음` 으로 건너뜀 | 그 조건이 학습되지 않았다는 뜻입니다. 나머지는 계속 돕니다 |
 | `invalid device ordinal` | GPU가 하나뿐입니다. 작업 3은 `GPU=0 bash scripts/train_ablate_p0.sh` |
 | 작업 2에서 통째 결측 값이 전부 비슷 | 정상입니다. 로그의 `정상:` 줄을 보시면 됩니다 |

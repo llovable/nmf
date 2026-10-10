@@ -4,7 +4,12 @@
 BRCA 631 스플릿에서 생존 평가.
 
 Cox는 train에만 맞추고, C-index/KM은 test(및 val+test)에서만 본다.
-블록 결측: 타깃을 지운 뒤 mean / TOBMI / Ridge / MOCHI-v5 / 공식 OmicsNMF·OmiTrans로 채운다.
+블록 결측: 타깃을 지운 뒤 여러 방법으로 채우고, 채운 행렬로 생존을 예측한다.
+
+--runs 이름=체크포인트 로 NMF-Transformer 모델을 몇 개든 넣을 수 있다.
+옛 비교 모델(MOCHI-v5 둘, 공식 OmicsNMF, 공식 OmiTrans)은 해당 파일이
+있을 때만 쓰고, 없으면 건너뛴다. 그래서 그 파일이 없는 코호트에서도
+mean/TOBMI/Ridge 는 돈다. 이 넷은 학습 데이터만 있으면 된다.
 특징은 train PCA(15)로 줄인다. 예전처럼 같은 샘플에 Cox를 맞추고 채점하지 않는다.
 """
 
@@ -20,6 +25,7 @@ from sklearn.neighbors import NearestNeighbors
 
 from compare_gate import PAIRS_1TO1, PAIRS_2TO1, RIDGE_ALPHAS, load_v5
 from eval_v5_noise import load_1to1, predict_2to1
+from models_nmf_tf import load_nmf_tf, predict_nmf_tf
 from official_wrap import load_omicsnmf_ckpt, load_omitrans_ckpt
 from train_gate import TripleSplitDataset
 
@@ -90,10 +96,51 @@ def load_official(official_dir, dim_r, dim_p, dim_m, device):
     return onmf, ot
 
 
+def _pair_ckpts(official_dir, kind):
+    return [Path(official_dir) / kind / f"{src}_to_{tgt}.ckpt" for tgt, src in PAIRS_1TO1]
+
+
+def load_legacy_optional(official_dir, dim_r, dim_p, dim_m, device):
+    """공식 구현은 가족별로 파일이 다 있을 때만 불러온다.
+
+    load_official 은 파일이 없으면 예외로 전체를 멈춘다. 생존 평가에서는
+    OmicsNMF 와 OmiTrans 를 따로 건너뛰어야 mean/TOBMI/Ridge 가 돈다.
+    """
+    dim = {"rna": dim_r, "protein": dim_p, "methyl": dim_m}
+    onmf = ot = None
+    if not official_dir or not Path(official_dir).is_dir():
+        where = official_dir or "(경로 없음)"
+        print(f"  [건너뜀] OmicsNMF-official, OmiTrans-official: {where} 없음")
+        return None, None
+    for kind, loader, label in (
+        ("omicsnmf", load_omicsnmf_ckpt, "OmicsNMF-official"),
+        ("omitrans", load_omitrans_ckpt, "OmiTrans-official"),
+    ):
+        paths = _pair_ckpts(official_dir, kind)
+        missing = [p for p in paths if not p.is_file()]
+        if missing:
+            print(f"  [건너뜀] {label}: {missing[0]} 없음")
+            continue
+        bucket = {}
+        for (tgt, src), path in zip(PAIRS_1TO1, paths):
+            bucket[tgt] = loader(path, dim[src], dim[tgt], device)
+        print(f"  불러옴 {label}")
+        if kind == "omicsnmf":
+            onmf = bucket
+        else:
+            ot = bucket
+    return onmf, ot
+
+
 def impute_target(method, tgt, tabs, ctx):
     """tabs: dict of observed eval arrays. Returns a filled copy."""
     out = {k: v.copy() for k, v in tabs.items()}
     if method == "observed":
+        return out
+    if method in ctx.get("runs", {}):
+        # --runs 로 들어온 NMF-Transformer. 타깃 오믹스를 통째로 가리고 복원한다.
+        pred = predict_nmf_tf(ctx["runs"][method], tabs, ctx["device"], missing=tgt)
+        out[tgt] = pred[tgt]
         return out
     if method == "mean":
         out[tgt] = np.zeros_like(out[tgt])
@@ -177,9 +224,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_dir", default="/home/dyan/nmf/mochi_code/processed_data/gate_brca")
     ap.add_argument("--surv", default="/home/dyan/nmf/mochi_code/processed_data/clinical/TCGA-BRCA.survival.tsv.gz")
-    ap.add_argument("--v5_ckpt", default="/home/dyan/nmf/mochi_code/results/current/gate_tri_v5/tri_best.ckpt")
-    ap.add_argument("--v5_1to1", default="/home/dyan/nmf/mochi_code/results/current/gate_compare/mochi_1to1.ckpt")
-    ap.add_argument("--official_dir", default="/home/dyan/nmf/mochi_code/results/current/official")
+    ap.add_argument("--runs", nargs="*", default=[],
+                    help="이름=체크포인트. NMF-Transformer 를 몇 개든 넣는다. "
+                         "예: MOCHI=results/.../nmf_tf_best.ckpt. 파일이 없으면 그 이름만 건너뛴다")
+    ap.add_argument("--v5_ckpt",
+                    default="/home/dyan/nmf/mochi_code/results/current/gate_tri_v5/tri_best.ckpt",
+                    help="옛 MOCHI-v5 2→1. 파일이 없으면 건너뛴다")
+    ap.add_argument("--v5_1to1",
+                    default="/home/dyan/nmf/mochi_code/results/current/gate_compare/mochi_1to1.ckpt",
+                    help="옛 MOCHI-v5 1→1. 파일이 없으면 건너뛴다")
+    ap.add_argument("--official_dir",
+                    default="/home/dyan/nmf/mochi_code/results/current/official",
+                    help="공식 OmicsNMF·OmiTrans 폴더. 없는 가족은 건너뛴다")
     ap.add_argument("--out_dir", default="/home/dyan/nmf/mochi_code/results/current/gate_v5_survival")
     ap.add_argument("--gpu", type=int, default=0)
     args = ap.parse_args()
@@ -211,9 +267,33 @@ def main():
 
     print("fitting Ridge 1→1/2→1 and loading models...")
     ridge1, ridge2 = fit_ridges(train)
-    mochi2 = load_v5(args.v5_ckpt, dim_r, dim_p, dim_m, device)
-    mochi1 = load_1to1(args.v5_1to1, dim_r, dim_p, dim_m, device)
-    onmf, ot = load_official(args.official_dir, dim_r, dim_p, dim_m, device)
+
+    runs = {}
+    for spec in args.runs:
+        if "=" not in spec:
+            raise SystemExit(f"--runs 형식은 이름=경로 입니다: {spec}")
+        name, path = spec.split("=", 1)
+        if not Path(path).is_file():
+            print(f"  [건너뜀] {name}: {path} 없음")
+            continue
+        runs[name] = load_nmf_tf(path, device)
+        print(f"  불러옴 {name}")
+
+    # 옛 네 모델은 파일이 있을 때만. 없으면 그 행이 빠질 뿐 전체는 돈다.
+    mochi1 = mochi2 = None
+    if args.v5_ckpt and Path(args.v5_ckpt).is_file():
+        mochi2 = load_v5(args.v5_ckpt, dim_r, dim_p, dim_m, device)
+        print("  불러옴 MOCHI-v5-2to1")
+    else:
+        print(f"  [건너뜀] MOCHI-v5-2to1: {args.v5_ckpt or '(경로 없음)'} 없음")
+    if args.v5_1to1 and Path(args.v5_1to1).is_file():
+        mochi1 = load_1to1(args.v5_1to1, dim_r, dim_p, dim_m, device)
+        print("  불러옴 MOCHI-v5-1to1")
+    else:
+        print(f"  [건너뜀] MOCHI-v5-1to1: {args.v5_1to1 or '(경로 없음)'} 없음")
+    onmf, ot = load_legacy_optional(args.official_dir, dim_r, dim_p, dim_m, device)
+    if not runs and mochi1 is None and mochi2 is None and onmf is None and ot is None:
+        print("  (모델 없음 — mean/TOBMI/Ridge 만 비교합니다)")
 
     mats = {
         "train": {m: _get(train, m) for m in MODS},
@@ -228,6 +308,7 @@ def main():
         "mochi2": mochi2,
         "onmf": onmf,
         "ot": ot,
+        "runs": runs,
         "device": device,
     }
     Xtr_obs = concat_omics(mats["train"]["rna"], mats["train"]["protein"], mats["train"]["methyl"])
@@ -237,20 +318,29 @@ def main():
         "test": ("test",),
         "heldout": ("val", "test"),
     }
-    methods = (
-        "mean",
-        "TOBMI-1to1", "TOBMI-2to1",
-        "Ridge-1to1", "Ridge-2to1",
-        "MOCHI-v5-1to1", "MOCHI-v5-2to1",
-        "OmicsNMF-official", "OmiTrans-official",
-    )
+    methods = ["mean", "TOBMI-1to1", "TOBMI-2to1", "Ridge-1to1", "Ridge-2to1"]
     setting = {
         "observed": "none", "mean": "none",
         "TOBMI-1to1": "1to1", "TOBMI-2to1": "2to1",
         "Ridge-1to1": "1to1", "Ridge-2to1": "2to1",
-        "MOCHI-v5-1to1": "1to1", "MOCHI-v5-2to1": "2to1",
-        "OmicsNMF-official": "1to1", "OmiTrans-official": "1to1",
     }
+    if mochi1 is not None:
+        methods.append("MOCHI-v5-1to1")
+        setting["MOCHI-v5-1to1"] = "1to1"
+    if mochi2 is not None:
+        methods.append("MOCHI-v5-2to1")
+        setting["MOCHI-v5-2to1"] = "2to1"
+    if onmf is not None:
+        methods.append("OmicsNMF-official")
+        setting["OmicsNMF-official"] = "1to1"
+    if ot is not None:
+        methods.append("OmiTrans-official")
+        setting["OmiTrans-official"] = "1to1"
+    for name in runs:
+        methods.append(name)
+        setting[name] = "2to1"          # 남은 두 오믹스를 모두 본다
+    methods = tuple(methods)
+    print(f"비교 대상 {len(methods)}개: {', '.join(methods)}")
     targets = ("none",) + MODS
 
     for eval_name, parts in eval_sets.items():
