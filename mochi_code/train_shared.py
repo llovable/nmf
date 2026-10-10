@@ -57,12 +57,17 @@ def _ae_val(enc, dec, loader, key_x, key_m, device, p=0.3):
     return tot / max(n, 1)
 
 
-def pretrain_aes(train_loader, val_loader, dims, device, epochs=70, patience=12):
+def pretrain_aes(train_loader, val_loader, dims, device, epochs=70, patience=12,
+                 make_enc=None, make_dec=None):
     keys = {"protein": ("x_prot", "m_prot"), "rna": ("x_rna", "m_rna"), "methyl": ("x_methy", "m_methy")}
     encs, decs = {}, {}
+    if make_enc is None:
+        make_enc = lambda d_in, d_h: nn.Linear(d_in, d_h)
+    if make_dec is None:
+        make_dec = lambda d_h, d_out: nn.Linear(d_h, d_out)
     for m in MODS:
-        enc = nn.Linear(dims[m], HIDDEN[m]).to(device)
-        dec = nn.Linear(HIDDEN[m], dims[m]).to(device)
+        enc = make_enc(dims[m], HIDDEN[m]).to(device)
+        dec = make_dec(HIDDEN[m], dims[m]).to(device)
         opt = Adam(list(enc.parameters()) + list(dec.parameters()), lr=1e-3, weight_decay=1e-5)
         kx, km = keys[m]
         best, pat, state = float("inf"), 0, None

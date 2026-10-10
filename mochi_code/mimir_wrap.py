@@ -19,21 +19,60 @@ import torch
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-MIMIR_ROOT = Path("/home/dyan/nmf/baselines/MIMIR")
-if str(MIMIR_ROOT) not in sys.path:
-    sys.path.insert(0, str(MIMIR_ROOT))
+# 원 실험 기계와 이 저장소 클론 모두에서 찾는다. src import는 학습·추론
+# 함수 안으로 미룬다. eval_biology / eval_ablation은 MIMIR 없이도
+# frames_from_dir·apply_zero만 쓰므로, 여기서 src를 올리면 비교가 통째로 막힌다.
+_HERE = Path(__file__).resolve()
+MIMIR_CANDIDATES = (
+    Path("/home/dyan/nmf/baselines/MIMIR"),
+    _HERE.parent.parent / "baselines" / "MIMIR",
+    _HERE.parent / "third_party" / "MIMIR",
+)
 
-from src.data_utils import (  # noqa: E402
-    MultiOmicDataset, SingleModalityDataset, get_dataloader,
-)
-from src.impute1 import impute_missing_values  # noqa: E402
-from src.mae_masked import (  # noqa: E402
-    MultiModalWithSharedSpace, build_pretrain_ae_for_modality,
-    eval_finetune_epoch, eval_modality_epoch_masked, extract_encoder_decoder_from_pretrained,
-    finetune_epoch, load_modality_with_config, pretrain_modality_epoch,
-    save_modality_with_config,
-)
-from src.translation import impute_missing_modalities_for_scenario  # noqa: E402
+_MIMIR_READY = False
+
+
+def _mimir_root():
+    for p in MIMIR_CANDIDATES:
+        if (p / "src" / "mae_masked.py").is_file():
+            return p
+    return None
+
+
+def _import_mimir_src():
+    """Noble-Lab/MIMIR의 src를 한 번만 로드한다."""
+    global _MIMIR_READY
+    global MultiOmicDataset, SingleModalityDataset, get_dataloader
+    global impute_missing_values
+    global MultiModalWithSharedSpace, build_pretrain_ae_for_modality
+    global eval_finetune_epoch, eval_modality_epoch_masked
+    global extract_encoder_decoder_from_pretrained, finetune_epoch
+    global load_modality_with_config, pretrain_modality_epoch
+    global save_modality_with_config, impute_missing_modalities_for_scenario
+    if _MIMIR_READY:
+        return
+    root = _mimir_root()
+    if root is None:
+        raise ImportError(
+            "MIMIR 소스가 없습니다. "
+            "git clone https://github.com/Noble-Lab/MIMIR.git baselines/MIMIR"
+        )
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from src.data_utils import (  # noqa: E402
+        MultiOmicDataset, SingleModalityDataset, get_dataloader,
+    )
+    from src.impute1 import impute_missing_values  # noqa: E402
+    from src.mae_masked import (  # noqa: E402
+        MultiModalWithSharedSpace, build_pretrain_ae_for_modality,
+        eval_finetune_epoch, eval_modality_epoch_masked,
+        extract_encoder_decoder_from_pretrained,
+        finetune_epoch, load_modality_with_config, pretrain_modality_epoch,
+        save_modality_with_config,
+    )
+    from src.translation import impute_missing_modalities_for_scenario  # noqa: E402
+    _MIMIR_READY = True
+
 
 MODS = ("protein", "rna", "methyl")
 HIDDEN = {"rna": [512], "protein": [128], "methyl": [256]}
@@ -61,6 +100,7 @@ def frames_from_dir(data_dir, split, stats=None):
 
 
 def _pretrain_one(name, df_tr, df_va, device, epochs=70, patience=12):
+    _import_mimir_src()
     input_dim = df_tr.shape[1]
     hidden = HIDDEN[name]
     cfg = dict(
@@ -108,6 +148,7 @@ def _eval_num(va):
 
 
 def train_mimir(data_dir, save_dir, device, phase1_epochs=70, phase2_epochs=120):
+    _import_mimir_src()
     save_dir = Path(save_dir)
     ae_dir = save_dir / "aes"
     ae_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +226,7 @@ def train_mimir(data_dir, save_dir, device, phase1_epochs=70, phase2_epochs=120)
 
 
 def load_mimir(save_dir, device):
+    _import_mimir_src()
     save_dir = Path(save_dir)
     ck = torch.load(save_dir / "shared_best.pt", map_location=device, weights_only=False)
     encoders, decoders, hidden_dims, mask_values = {}, {}, {}, {}
@@ -206,6 +248,7 @@ def load_mimir(save_dir, device):
 
 def predict_values(model, mask_values, corrupted_dfs, device, batch_size=64):
     """칸 결측(NaN)을 채운다. 반환: {mod: ndarray}."""
+    _import_mimir_src()
     raw = impute_missing_values(
         model=model, mask_values=mask_values, data_corrupted=corrupted_dfs,
         batch_size=batch_size, device=device, self_weight=10.0,
@@ -219,6 +262,7 @@ def predict_values(model, mask_values, corrupted_dfs, device, batch_size=64):
 
 def predict_block(model, mask_values, present_dfs, target, columns, index, device, batch_size=64):
     """타깃 모달리티 전체를 나머지에서 복원한다. 행 순서는 index."""
+    _import_mimir_src()
     raw = impute_missing_modalities_for_scenario(
         model=model, mask_values=mask_values, data_present=present_dfs,
         target_modalities=[target], batch_size=batch_size, device=device,
