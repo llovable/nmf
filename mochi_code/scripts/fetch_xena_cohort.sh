@@ -29,5 +29,8 @@ fetch "https://gdc.xenahubs.net/download/TCGA-${COHORT}.methylation450.tsv.gz" \
   "$RAW/TCGA-${COHORT}.methylation450.tsv.gz"
 fetch "https://tcga.xenahubs.net/download/TCGA.${COHORT}.sampleMap/${COHORT}_clinicalMatrix" \
   "$CLIN/${COHORT}_clinicalMatrix"
+# 생존 평가(eval_survival.py)에 필요하다. 임상 행렬과 다른 파일이다.
+fetch "https://gdc.xenahubs.net/download/TCGA-${COHORT}.survival.tsv.gz" \
+  "$CLIN/TCGA-${COHORT}.survival.tsv.gz"
 
 echo "${COHORT} downloads ready"

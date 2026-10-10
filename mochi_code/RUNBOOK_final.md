@@ -182,11 +182,33 @@ python eval_downstream.py \
   2>&1 | tee ~/task5.log
 ```
 
-> **생존 분석(`eval_survival.py`)은 지금 옛 체크포인트 경로에 고정돼 있어
-> 그대로는 안 돕니다.** 손대야 하니 이번에는 건너뛰고, 하위 과제 결과를
-> 먼저 보내주세요. 필요하면 그때 고치겠습니다.
+그다음 생존 분석입니다. `--runs` 를 받도록 고쳐 뒀습니다.
 
----
+```bash
+python eval_survival.py \
+  --data_dir processed_data/gate_brca \
+  --surv processed_data/clinical/TCGA-BRCA.survival.tsv.gz \
+  --out_dir results/current/surv_final --gpu 0 \
+  --runs "MOCHI=results/current/lr_ctl/none/brca_hybrid/nmf_tf_best.ckpt" \
+  2>&1 | tee -a ~/task5.log
+```
+
+생존 파일이 없으면 먼저 받으세요. `fetch_xena_cohort.sh` 에 추가해 뒀습니다.
+
+```bash
+bash scripts/fetch_xena_cohort.sh BRCA      # 이미 있는 파일은 건너뜁니다
+```
+
+옛 비교 모델(MOCHI-v5, 공식 구현)은 **파일이 있을 때만** 쓰고 없으면 건너뜁니다.
+그래서 `mean / TOBMI / Ridge / MOCHI` 넷만 비교해도 정상적으로 돕니다.
+맨 윗줄에 `비교 대상 N개: ...` 이 찍히니 거기서 확인하시면 됩니다.
+
+### 보는 곳
+
+`C=` 값(C-index)입니다. **0.5면 무작위**, 높을수록 생존 예측이 잘 되는 것입니다.
+`MOCHI` 줄이 `mean`·`Ridge` 줄보다 높으면, 채운 값이 임상적으로 의미 있는
+구조를 보존한다는 뜻입니다. **정확도에서 지더라도 이 축에서 이기면 논문이
+훨씬 좋아집니다.**
 
 ## 보내주실 것
 
