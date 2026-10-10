@@ -206,8 +206,9 @@ def main():
     dim_r, dim_p, dim_m = train.rna_f.shape[1], train.prot_f.shape[1], train.methy_f.shape[1]
     print(f"device={device} n={len(train)}/{len(val)}/{len(test)}")
 
-    split = pd.read_csv(Path(args.data_dir) / "sample_split.tsv", sep="\t")
-    # TripleSplitDataset order follows intersection of tsv columns after T — use same index via csv load
+    # 표본 순서는 세 오믹스 tsv 의 열 교집합으로 정한다. TripleSplitDataset 과 같은 규칙이다.
+    # (sample_split.tsv 를 읽던 줄이 있었으나 어디에도 쓰이지 않으면서 그 파일을
+    #  필수로 만들고 있었다. 없는 코호트에서 불필요하게 멈춘다.)
     def ids_for(split_name):
         rna = pd.read_csv(Path(args.data_dir) / f"rna.{split_name}.tsv", sep="\t", index_col=0)
         prot = pd.read_csv(Path(args.data_dir) / f"protein.{split_name}.tsv", sep="\t", index_col=0)

@@ -21,6 +21,12 @@ ROOT=results/current/lr_ctl
 # SEEDS 를 주면 시드별로 돌리고 경로에 _s<시드> 를 붙인다. 기존 _hybrid 결과는
 # 2026-09-03 단일 시드 런이라 그대로 둔다. 논문 표는 시드 3개 쪽을 쓴다.
 SEEDS="${SEEDS:-0 1 2}"
+# 쓸 GPU. 두 개를 주면 조건 두 개가 동시에 돈다. 하나만 주면 순차로 돈다.
+# 예전에는 0과 1이 코드에 박혀 있어서 GPU 한 장짜리 장비에서 그냥 죽었다.
+GPUS="${GPUS:-0 1}"
+COHORTS="${COHORTS:-brca luad kirc}"
+set -- $GPUS
+G0="$1"; G1="${2:-$1}"
 
 train_one() {
   local cond=$1 cohort=$2 gpu=$3
@@ -69,35 +75,37 @@ eval_one() {
     | tee "$ROOT/$cond/amp_${cohort}_s${sd}.log"
 }
 
+pair() {   # pair <train_one|eval_one> <조건A> <조건B> <암종> <시드>
+  # GPU 가 둘이면 동시에, 하나면 순차로. 예전에는 0과 1이 박혀 있어서
+  # 카드 한 장짜리 장비에서 cuda:1 을 잡다가 그냥 죽었다.
+  local fn=$1 a=$2 b=$3 coh=$4 sd=$5
+  if [[ "$G0" == "$G1" ]]; then
+    "$fn" "$a" "$coh" "$G0" "$sd"
+    "$fn" "$b" "$coh" "$G0" "$sd"
+  else
+    "$fn" "$a" "$coh" "$G0" "$sd" &
+    "$fn" "$b" "$coh" "$G1" "$sd" &
+    wait
+  fi
+}
+
 run_cohort() {
   local cohort=$1 sd=${2:-0}
-  train_one ctl_base "$cohort" 0 "$sd" &
-  train_one w0 "$cohort" 1 "$sd" &
-  wait
-  train_one nmf0 "$cohort" 0 "$sd" &
-  train_one lw0_nmf0 "$cohort" 1 "$sd" &
-  wait
-  train_one none "$cohort" 0 "$sd" &
-  train_one resid "$cohort" 1 "$sd" &
-  wait
-  train_one resid_nmf0 "$cohort" 0 "$sd"
-  eval_one ctl_base "$cohort" 0 "$sd" &
-  eval_one w0 "$cohort" 1 "$sd" &
-  wait
-  eval_one nmf0 "$cohort" 0 "$sd" &
-  eval_one lw0_nmf0 "$cohort" 1 "$sd" &
-  wait
-  eval_one none "$cohort" 0 "$sd" &
-  eval_one resid "$cohort" 1 "$sd" &
-  wait
-  eval_one resid_nmf0 "$cohort" 0 "$sd"
+  pair train_one ctl_base   w0         "$cohort" "$sd"
+  pair train_one nmf0       lw0_nmf0   "$cohort" "$sd"
+  pair train_one none       resid      "$cohort" "$sd"
+  train_one resid_nmf0 "$cohort" "$G0" "$sd"
+  pair eval_one  ctl_base   w0         "$cohort" "$sd"
+  pair eval_one  nmf0       lw0_nmf0   "$cohort" "$sd"
+  pair eval_one  none       resid      "$cohort" "$sd"
+  eval_one resid_nmf0 "$cohort" "$G0" "$sd"
 }
 
 mkdir -p "$ROOT"
 for sd in $SEEDS; do
-  run_cohort brca "$sd"
-  run_cohort luad "$sd"
-  run_cohort kirc "$sd"
+  for coh in $COHORTS; do
+    run_cohort "$coh" "$sd"
+  done
 done
 
 echo "$(date) ALL DONE"

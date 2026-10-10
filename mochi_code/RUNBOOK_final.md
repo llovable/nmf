@@ -12,10 +12,13 @@
 
 ```bash
 cd /home/dyan/nmf
+source /home/dyan/nmf/.nmf/bin/activate
 git pull
 git log --oneline -1
 cd mochi_code && python tests/test_patches.py
 ```
+
+아래 명령은 전부 `mochi_code` 안에서, 위 가상환경을 켠 채로 돌립니다.
 
 마지막 줄이 `모든 검증 통과` 여야 합니다. 통과 안 하면 **돌리지 말고 알려주세요.**
 
@@ -52,8 +55,15 @@ python eval_cell_rate.py \
 
 ### 보는 곳
 
-`짝지은 차이` 절의 **편상관** 과 **부호** 열입니다. 전체 비교에서
-한쪽이 일관되게 나으면 신호이고, 반반이면 잡음입니다.
+`짝지은 차이` 절입니다. 거기서 볼 것은 세 가지입니다.
+
+- **평균Δ** — 음수면 뒤쪽 단계가 낫다는 뜻
+- **평균/sd** — 차이가 흔들림의 몇 배인가. **1보다 크면 의미 있는 쪽**
+- **부호** — 몇 번 중 몇 번이 같은 방향인가. 전부 같은 방향이면 신호,
+  반반이면 잡음
+
+그리고 결측 비율이 올라갈수록 **평균Δ** 가 커지는지 보세요. 커지면
+"결측이 심할 때 유리하다"는 설명이 섭니다.
 
 ---
 
@@ -75,7 +85,6 @@ python eval_cell_rate.py \
 세 암종 각각에 대해, **생물학 지식을 전부 끈 조건**의 체크포인트를 씁니다.
 
 ```bash
-cd /home/dyan/nmf/mochi_code
 for COH in brca luad kirc; do
   python eval_baselines.py \
     --data_dir processed_data/gate_$COH \
@@ -85,8 +94,20 @@ for COH in brca luad kirc; do
 done 2>&1 | tee ~/task2.log
 ```
 
-> 작업 3을 먼저 돌리셨다면 경로가 `..._s0/nmf_tf_best.ckpt` 로 바뀝니다.
-> 둘 중 있는 쪽을 쓰시면 됩니다.
+그리고 **사다리 끝 모델로도 한 번 더** 돌려주세요. 논문에서 어느 쪽을
+보고할지 아직 정하지 않았으므로 둘 다 있어야 합니다.
+
+```bash
+for COH in brca luad kirc; do
+  python eval_baselines.py \
+    --data_dir processed_data/gate_$COH \
+    --ckpt results/current/lr_stage5c/c1/${COH}_s0/nmf_tf_best.ckpt \
+    --split test --rate 0.3 --gpu 0 \
+    --out results/current/baselines_c1_$COH.tsv
+done 2>&1 | tee -a ~/task2.log
+```
+
+> 없는 체크포인트는 건너뛰라는 메시지만 남기고 넘어갑니다.
 
 ### 보는 곳
 
@@ -115,8 +136,13 @@ done 2>&1 | tee ~/task2.log
 ### 명령
 
 ```bash
-cd /home/dyan/nmf/mochi_code
-SEEDS="0 1 2" GPU=0 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
+SEEDS="0 1 2" GPUS="0 1" bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
+```
+
+**GPU가 한 장이면** 이렇게 하세요. 순차로 돌아갑니다(시간은 두 배).
+
+```bash
+SEEDS="0 1 2" GPUS="0" bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
 ```
 
 - 결과는 `results/current/lr_ctl/<조건>/<암종>_s<번호>/` 에 쌓입니다.
@@ -124,13 +150,15 @@ SEEDS="0 1 2" GPU=0 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
   그대로 두고, 논문 표는 새로 나온 `_s0/_s1/_s2` 쪽을 씁니다.
 - 끊기면 같은 명령으로 이어집니다.
 
-GPU 두 장이면 나눠 돌리셔도 됩니다.
-
-```bash
-SEEDS="0" GPU=0 bash scripts/train_ablate_p0.sh &
-SEEDS="1 2" GPU=1 bash scripts/train_ablate_p0.sh &
-wait
-```
+> 이 스크립트는 **스스로 두 카드를 동시에 씁니다.** 그래서 인스턴스를
+> 두 개 띄우면 안 됩니다. 네 작업이 두 카드에 몰려 메모리가 터집니다.
+> 나눠 돌리고 싶으시면 암종으로 나누세요.
+>
+> ```bash
+> COHORTS="brca" SEEDS="0 1 2" GPUS="0" bash scripts/train_ablate_p0.sh &
+> COHORTS="luad kirc" SEEDS="0 1 2" GPUS="1" bash scripts/train_ablate_p0.sh &
+> wait
+> ```
 
 ---
 
