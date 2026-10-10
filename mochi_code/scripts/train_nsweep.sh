@@ -16,6 +16,12 @@ COHORTS="${COHORTS:-brca luad kirc}"
 SEEDS="${SEEDS:-0 1 2}"
 NS="${NS:-100 200 300 0}"      # 0 = 전체
 cd "$ROOT"
+# 작업 4는 이 스크립트만 실행한다. 호출 전에 가상환경을 켜지 않아도 되게 한다.
+VENV="${MOCHI_VENV:-/home/dyan/nmf/.nmf/bin/activate}"
+if [[ -f "$VENV" ]]; then
+  # shellcheck disable=SC1091
+  source "$VENV"
+fi
 export PYTHONUNBUFFERED=1
 
 "$PY" - <<'PYCHK'
@@ -55,7 +61,8 @@ for coh in $COHORTS; do
 done
 
 echo
-echo "=== 환자 수별 통째 결측 채움 오차 (반복 평균 ± 흔들림) ==="
+echo "=== 검증 집합의 통째 결측 채움 오차 (시드 평균 ± 표준편차) ==="
+echo "조기 종료에 쓴 검증 오차입니다. 검사 집합 숫자가 아닙니다."
 "$PY" - "$RES" <<'PYSUM'
 import sys, glob, os
 import numpy as np, torch
@@ -78,4 +85,5 @@ print()
 print("읽는 법: 전체 환자 수에서도 곡선이 가파르면 표본이 병목이다.")
 print("         평평해졌으면 환자를 더 모아도 안 좋아진다는 뜻이고, 그때는")
 print("         구조나 특징 선택 쪽을 봐야 한다.")
+print("         ± 는 초기화 흔들림이다. 환자 부분표집은 시드와 무관하게 고정이다.")
 PYSUM

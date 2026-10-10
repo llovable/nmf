@@ -142,6 +142,15 @@ def main():
     print(piv.loc[order].to_string(float_format=lambda v: f"{v:.4f}", na_rep="-"))
     print("\n참고: AE-only 는 부분 결측에서만 정의됩니다(통째 결측은 자기 데이터가 없음).")
     print("      MOCHI 가 AE-only 와 비슷하면, 부분 결측 이득은 융합 구조의 공이 아닙니다.")
+    blk = df[df["regime"] == "통째"].pivot_table(index="target", columns="method", values="zrmse")
+    if {"KNN", "softImpute"}.issubset(blk.columns):
+        gap = float((blk["KNN"] - blk["softImpute"]).abs().max())
+        if gap < 1e-4:
+            print("정상: 통째 결측에서 KNN과 softImpute가 같습니다. "
+                  "한 오믹스가 비면 둘 다 평균(z=0)으로 퇴화한 것이고, 버그가 아닙니다.")
+        else:
+            print(f"주의: 통째 결측에서 KNN과 softImpute가 다릅니다 (최대 차이 {gap:.4f}). "
+                  "이 둘은 같아야 합니다.")
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

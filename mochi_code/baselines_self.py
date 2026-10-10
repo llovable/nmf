@@ -42,16 +42,22 @@ def knn_impute(nan_tabs, n_neighbors=10):
     out = {}
     for m in MODS:
         X = np.asarray(nan_tabs[m], dtype=np.float64)
+        # 통째 결측. 관측이 하나도 없으면 열 평균을 낼 수 없고, z-점수에서
+        # 그 평균은 0이다. sklearn은 열을 통째로 지운 뒤 Mean of empty slice
+        # 경고를 낸다. 고장이 아니라 softImpute와 같은 퇴화이므로 여기서 끝낸다.
+        if not np.isfinite(X).any():
+            out[m] = np.zeros(X.shape, dtype=np.float32)
+            continue
         k = int(min(n_neighbors, max(2, X.shape[0] - 1)))
         imp = KNNImputer(n_neighbors=k, weights="distance")
         filled = imp.fit_transform(X)
-        # 전 열이 NaN이면 sklearn이 열을 지운다. 모양을 되돌려 놓는다.
+        # 일부 열만 전부 NaN이면 sklearn이 그 열을 지운다. 0으로 되돌려 놓는다.
         if filled.shape[1] != X.shape[1]:
             full = np.zeros_like(X)
             keep = ~np.all(np.isnan(X), axis=0)
             full[:, keep] = filled
             filled = full
-        out[m] = filled.astype(np.float32)
+        out[m] = np.nan_to_num(filled, nan=0.0).astype(np.float32)
     return out
 
 
