@@ -18,6 +18,9 @@ cd /home/dyan/nmf/mochi_code
 source /home/dyan/nmf/.nmf/bin/activate
 export OMP_NUM_THREADS=8
 ROOT=results/current/lr_ctl
+# SEEDS 를 주면 시드별로 돌리고 경로에 _s<시드> 를 붙인다. 기존 _hybrid 결과는
+# 2026-09-03 단일 시드 런이라 그대로 둔다. 논문 표는 시드 3개 쪽을 쓴다.
+SEEDS="${SEEDS:-0 1 2}"
 
 train_one() {
   local cond=$1 cohort=$2 gpu=$3
@@ -32,65 +35,70 @@ train_one() {
     resid_nmf0) extra=(--lambda_w 2.0 --lambda_nmf 0.0) ;;
     *) echo "unknown cond $cond" >&2; return 1 ;;
   esac
-  local save=$ROOT/$cond/${cohort}_hybrid
+  local sd=${4:-0}
+  local save=$ROOT/$cond/${cohort}_s${sd}
   mkdir -p "$save"
-  echo "$(date) === $cond $cohort GPU=$gpu ${extra[*]} gan_to_mse=0 ==="
+  echo "$(date) === $cond $cohort seed=$sd GPU=$gpu ${extra[*]} gan_to_mse=0 ==="
   python -u train_nmf_tf.py \
     --data_dir processed_data/gate_$cohort \
     --save_dir "$save" \
     --gpu "$gpu" \
     --w_from_others \
     --gan_to_mse 0 \
+    --seed "$sd" \
     "${extra[@]}" \
     | tee "$save/train.log"
 }
 
 eval_one() {
   local cond=$1 cohort=$2 gpu=$3
-  local save=$ROOT/$cond/${cohort}_hybrid
+  local sd=${4:-0}
+  local save=$ROOT/$cond/${cohort}_s${sd}
   local mimir=results/current/mimir
   [ "$cohort" = brca ] || mimir=results/current/mimir_$cohort
   local clin_args=(--clinical "")
   [ "$cohort" = brca ] && clin_args=()
-  echo "$(date) === eval $cond $cohort ==="
+  echo "$(date) === eval $cond $cohort seed=$sd ==="
   python -u eval_amplitude.py \
     --data_dir processed_data/gate_$cohort \
     "${clin_args[@]}" \
     --mimir_dir "$mimir" \
-    --out_dir "$ROOT/$cond/amp_$cohort" \
+    --out_dir "$ROOT/$cond/amp_${cohort}_s${sd}" \
     --gpu "$gpu" \
     --runs "MOCHI=$save/nmf_tf_best.ckpt" \
-    | tee "$ROOT/$cond/amp_$cohort.log"
+    | tee "$ROOT/$cond/amp_${cohort}_s${sd}.log"
 }
 
 run_cohort() {
-  local cohort=$1
-  train_one ctl_base "$cohort" 0 &
-  train_one w0 "$cohort" 1 &
+  local cohort=$1 sd=${2:-0}
+  train_one ctl_base "$cohort" 0 "$sd" &
+  train_one w0 "$cohort" 1 "$sd" &
   wait
-  train_one nmf0 "$cohort" 0 &
-  train_one lw0_nmf0 "$cohort" 1 &
+  train_one nmf0 "$cohort" 0 "$sd" &
+  train_one lw0_nmf0 "$cohort" 1 "$sd" &
   wait
-  train_one none "$cohort" 0 &
-  train_one resid "$cohort" 1 &
+  train_one none "$cohort" 0 "$sd" &
+  train_one resid "$cohort" 1 "$sd" &
   wait
-  train_one resid_nmf0 "$cohort" 0
-  eval_one ctl_base "$cohort" 0 &
-  eval_one w0 "$cohort" 1 &
+  train_one resid_nmf0 "$cohort" 0 "$sd"
+  eval_one ctl_base "$cohort" 0 "$sd" &
+  eval_one w0 "$cohort" 1 "$sd" &
   wait
-  eval_one nmf0 "$cohort" 0 &
-  eval_one lw0_nmf0 "$cohort" 1 &
+  eval_one nmf0 "$cohort" 0 "$sd" &
+  eval_one lw0_nmf0 "$cohort" 1 "$sd" &
   wait
-  eval_one none "$cohort" 0 &
-  eval_one resid "$cohort" 1 &
+  eval_one none "$cohort" 0 "$sd" &
+  eval_one resid "$cohort" 1 "$sd" &
   wait
-  eval_one resid_nmf0 "$cohort" 0
+  eval_one resid_nmf0 "$cohort" 0 "$sd"
 }
 
 mkdir -p "$ROOT"
-run_cohort brca
-run_cohort luad
-run_cohort kirc
+for sd in $SEEDS; do
+  run_cohort brca "$sd"
+  run_cohort luad "$sd"
+  run_cohort kirc "$sd"
+done
 
 echo "$(date) ALL DONE"
 echo "앵커: $ROOT/ctl_base  (λ_w=2.0 λ_nmf=0.1 tokens on gan_to_mse=0)"
