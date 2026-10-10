@@ -176,9 +176,12 @@ def test_c():
     # 같이 넣어야 저랭크 구조가 그 열로 전달된다.
     blk = {m: (true[m].copy() if m != "rna" else np.full_like(true[m], np.nan)) for m in MODS}
     per = softimpute_per_omics(blk, rank=K)["rna"]
+    knn_blk = knn_impute(blk, n_neighbors=5)["rna"]
     con_noanchor = softimpute_concat(blk, rank=K)["rna"]
     check("블록에서 오믹스별 softImpute는 퇴화한다 (예상된 동작)",
           np.allclose(per, 0.0, atol=1e-6), "전부 0 = 열 평균")
+    check("블록에서 KNN도 같은 값(0)으로 퇴화한다",
+          np.allclose(knn_blk, per, atol=1e-6), "KNN = softImpute = 0")
     check("anchor 없는 concat도 퇴화한다 (0으로 초기화한 hard-impute의 고정점)",
           np.allclose(con_noanchor, 0.0, atol=1e-6),
           "빈 열은 Z의 영공간에 남는다 — anchor_tabs가 필요한 이유")
@@ -637,10 +640,150 @@ def test_k():
           ge is None or float(ge.abs().max()) == 0.0)
 
 
+def _write_gate(data_dir, split, n, dims, rng):
+    import pandas as pd
+    cols = [f"{split}{i}" for i in range(n)]
+    for key, fname in (("rna", "rna"), ("protein", "protein"), ("methyl", "methy")):
+        p = dims[key]
+        frame = pd.DataFrame(
+            rng.normal(size=(p, n)).astype(np.float32),
+            index=[f"{fname}{j}" for j in range(p)],
+            columns=cols,
+        )
+        frame.to_csv(data_dir / f"{fname}.{split}.tsv", sep="\t")
+
+
+def test_l():
+    """기준표가 합성 코호트에서 끝까지 도는지, 대조 스크립트가 적은 대로 도는지."""
+    import os
+    import subprocess
+    import tempfile
+
+    import pandas as pd
+
+    print("L) 기준표 실행부와 시드 루프 계약")
+    dims = {"protein": 6, "rna": 8, "methyl": 7}
+    k = 4
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        data = root / "gate"
+        data.mkdir()
+        rng = np.random.default_rng(0)
+        _write_gate(data, "train", 36, dims, rng)
+        _write_gate(data, "test", 18, dims, rng)
+        model = make_model(dims, k, add_residual=False, w_head_act="softplus",
+                           use_nmf_tokens=False, w_from_others=True)
+        ckpt = root / "nmf_tf_best.ckpt"
+        torch.save({
+            "model": model.state_dict(),
+            "dims": dims, "k": k, "d_model": 32, "n_heads": 4, "n_layers": 1,
+            "use_nmf_tokens": False, "use_transformer": True, "use_lowrank": True,
+            "gamma_nonneg": False, "w_head_act": "softplus", "w_from_others": True,
+            "add_residual": False, "mlp_ae": False, "self_weight": 10.0,
+            "split_latent": False, "block_attn": True, "cell_attn": True,
+            "content_tokens": False, "detach_w_head": False,
+        }, ckpt)
+        out = root / "baselines.tsv"
+        code = Path(__file__).resolve().parent.parent
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(code)
+        proc = subprocess.run(
+            [sys.executable, str(code / "eval_baselines.py"),
+             "--data_dir", str(data), "--ckpt", str(ckpt),
+             "--split", "test", "--rate", "0.3", "--gpu", "0",
+             "--out", str(out)],
+            cwd=str(code), env=env, capture_output=True, text=True)
+        tail = (proc.stdout + "\n" + proc.stderr)[-1500:]
+        check("eval_baselines.py가 합성 데이터로 끝난다", proc.returncode == 0, tail)
+        if proc.returncode == 0:
+            df = pd.read_csv(out, sep="\t")
+            methods = set(df["method"])
+            check("MOCHI·AE-only·KNN·softImpute 두 종류가 있다",
+                  {"MOCHI", "AE-only", "KNN", "softImpute", "softImpute-concat"} <= methods,
+                  str(sorted(methods)))
+            check("AE-only는 부분 결측에만 있다",
+                  set(df.loc[df["method"] == "AE-only", "regime"]) == {"부분"})
+            blk = df[df["regime"] == "통째"]
+            for tgt, sub in blk.groupby("target"):
+                knn = float(sub.loc[sub["method"] == "KNN", "zrmse"].iloc[0])
+                si = float(sub.loc[sub["method"] == "softImpute", "zrmse"].iloc[0])
+                check(f"통째 {tgt}: KNN과 softImpute가 같다", abs(knn - si) < 1e-4,
+                      f"KNN={knn:.4f} softImpute={si:.4f}")
+                check(f"통째 {tgt}: 그 값이 1 근처(평균 찍기)", 0.85 < knn < 1.15,
+                      f"{knn:.4f}")
+            check("로그가 그 퇴화를 정상으로 말한다",
+                  "정상: 통째 결측에서 KNN과 softImpute가 같습니다" in proc.stdout)
+
+    script = code / "scripts" / "train_ablate_p0.sh"
+    text = script.read_text()
+    check("저장 경로가 _s<시드>이다", "${cohort}_s${sd}" in text)
+    check("저장 경로에 _hybrid 대입이 없다", "${cohort}_hybrid" not in text)
+    ns = (code / "scripts" / "train_nsweep.sh").read_text()
+    check("환자 수 스윕이 100·200·300·전체", 'NS="${NS:-100 200 300 0}"' in ns)
+    check("암종 인원 이상이면 건너뛴다", '"$n" -ge "$TOTAL"' in ns)
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td) / "rna.train.tsv"
+        fake.write_text("id\t" + "\t".join(f"s{i}" for i in range(223)) + "\n")
+        counted = subprocess.run(
+            ["bash", "-c",
+             'TOTAL=$(( $(head -1 "$1" | tr "\\t" "\\n" | wc -l) - 1 )); '
+             'for n in 100 200 300 0; do '
+             '  if [[ "$n" != "0" && "$n" -ge "$TOTAL" ]]; then echo "skip $n"; '
+             '  else echo "run $n"; fi; done',
+             "bash", str(fake)],
+            capture_output=True, text=True)
+        got = counted.stdout.split()
+        check("폐선암 223명이면 300만 건너뛴다",
+              counted.returncode == 0 and got == ["run", "100", "run", "200", "skip", "300", "run", "0"],
+              counted.stdout.strip() or counted.stderr)
+
+    def dry(extra, root_dir):
+        env = os.environ.copy()
+        env.pop("GPU", None)
+        env.pop("FAIL_COND", None)
+        env.pop("SEEDS", None)
+        env.update(extra)
+        env["DRY"] = "1"
+        env["DRY_ROOT"] = str(root_dir)
+        return subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+
+    with tempfile.TemporaryDirectory() as td:
+        one = Path(td)
+        proc = dry({"SEEDS": "0", "GPU": "0"}, one)
+        calls = (one / "calls.tsv").read_text().strip().splitlines() if proc.returncode == 0 else []
+        gpus = {line.split("\t")[-1] for line in calls}
+        check("GPU=0이면 0번만 쓴다", proc.returncode == 0 and gpus == {"0"},
+              f"rc={proc.returncode} gpus={gpus} err={proc.stderr[-400:]}")
+        trains = [ln for ln in calls if ln.startswith("train\t")]
+        check("시드 하나면 학습 21번(7조건×3암종)", len(trains) == 21, str(len(trains)))
+        check("경로에 _hybrid가 없다", not any("_hybrid" in ln for ln in calls))
+        n_before = len(calls)
+        again = dry({"SEEDS": "0", "GPU": "0"}, one)
+        n_after = len((one / "calls.tsv").read_text().strip().splitlines())
+        check("다시 돌리면 체크포인트를 건너뛴다",
+              again.returncode == 0 and n_after == n_before
+              and again.stdout.count("skip train") == 21
+              and again.stdout.count("skip eval") == 21,
+              f"calls {n_before}->{n_after} skip_train={again.stdout.count('skip train')}")
+
+    with tempfile.TemporaryDirectory() as td:
+        both = Path(td)
+        proc = dry({"SEEDS": "0"}, both)
+        gpus = {line.split("\t")[-1] for line in (both / "calls.tsv").read_text().splitlines()}
+        check("GPU를 비우면 0번과 1번을 같이 쓴다", proc.returncode == 0 and gpus == {"0", "1"},
+              str(gpus))
+
+    with tempfile.TemporaryDirectory() as td:
+        proc = dry({"SEEDS": "0", "GPU": "0", "FAIL_COND": "w0"}, Path(td))
+        check("한 조건이 죽으면 ALL DONE이 찍히지 않는다",
+              proc.returncode != 0 and "ALL DONE" not in proc.stdout,
+              f"rc={proc.returncode}")
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
     test_a(); test_b(); test_c(); test_d(); test_e(); test_f(); test_g(); test_h(); test_i()
-    test_j(); test_k()
+    test_j(); test_k(); test_l()
     print()
     if FAILS:
         print(f"실패 {len(FAILS)}건: " + "; ".join(FAILS))

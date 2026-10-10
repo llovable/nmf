@@ -1,8 +1,13 @@
 # 인수인계: 원고 전 마지막 다섯 작업
 
+저장소: https://github.com/llovable/nmf
+브랜치: `cursor/fix-runbook-commands-a549`
+
+이 파일만 읽고 아래 명령을 그대로 돌리시면 됩니다.
+
 **부탁드리는 일:** 다섯 가지를 돌리고 결과를 보내주시면 됩니다.
 **셋은 학습이 필요 없고**(이미 학습된 모델을 불러다 평가만), 둘만 학습합니다.
-학습까지 다 합쳐 **약 한 시간 반**입니다.
+학습까지 다 합쳐 **약 한 시간 반**입니다. 작업 3의 30–40분은 GPU 두 장 기준입니다.
 
 이걸로 논문 본문에 들어갈 표와 그림이 전부 채워집니다.
 
@@ -12,8 +17,11 @@
 
 ```bash
 cd /home/dyan/nmf
-git pull
+git fetch origin
+git checkout cursor/fix-runbook-commands-a549
+git pull --ff-only origin cursor/fix-runbook-commands-a549
 git log --oneline -1
+source /home/dyan/nmf/.nmf/bin/activate
 cd mochi_code && python tests/test_patches.py
 ```
 
@@ -52,8 +60,9 @@ python eval_cell_rate.py \
 
 ### 보는 곳
 
-`짝지은 차이` 절의 **편상관** 과 **부호** 열입니다. 전체 비교에서
-한쪽이 일관되게 나으면 신호이고, 반반이면 잡음입니다.
+`짝지은 차이` 절의 **평균/sd** 와 **부호** 열입니다. 평균/sd 는 차이 평균을
+차이의 표준편차로 나눈 값입니다. 절대값이 1을 넘고 부호가 `3/3`처럼
+한쪽으로 몰리면 신호이고, 부호가 반반이면 잡음입니다.
 
 ---
 
@@ -76,6 +85,7 @@ python eval_cell_rate.py \
 
 ```bash
 cd /home/dyan/nmf/mochi_code
+source /home/dyan/nmf/.nmf/bin/activate
 for COH in brca luad kirc; do
   python eval_baselines.py \
     --data_dir processed_data/gate_$COH \
@@ -85,23 +95,26 @@ for COH in brca luad kirc; do
 done 2>&1 | tee ~/task2.log
 ```
 
-> 작업 3을 먼저 돌리셨다면 경로가 `..._s0/nmf_tf_best.ckpt` 로 바뀝니다.
-> 둘 중 있는 쪽을 쓰시면 됩니다.
+> 작업 3을 먼저 돌리셨다면 체크포인트는
+> `results/current/lr_ctl/none/${COH}_s0/nmf_tf_best.ckpt` 입니다.
+> `_hybrid` 와 `_s0` 중 있는 쪽을 쓰시면 됩니다.
 
 ### 보는 곳
 
 `MOCHI` 줄과 `AE-only` 줄의 **부분 결측** 칸입니다. 둘이 비슷하면
 부분 결측의 이득은 융합 구조의 공이 아닙니다.
 
-**정상 동작 확인:** 통째 결측에서 `KNN` 과 `softImpute` 가 **같은 값**으로
-나오고 그 값이 1.0 근처면 맞습니다. 한 오믹스가 통째로 비면 두 방법 다
-"평균 찍기"로 퇴화하기 때문입니다. 그 줄이 사실상 기준선입니다.
+**정상 동작 확인:** 로그에 `정상: 통째 결측에서 KNN과 softImpute가 같습니다`
+가 찍혀야 합니다. 표에서도 두 칸이 **같은 값**이고 1.0 근처입니다.
+한 오믹스가 통째로 비면 두 방법 다 "평균 찍기"로 퇴화하기 때문입니다.
+`softImpute-concat` 은 학습 집합을 같이 넣으므로 이 값과 달라도 됩니다.
+그 줄이 사실상 기준선입니다.
 
 ---
 
-## 작업 3. 네 경로 해부를 세 번씩 반복  ← **타협 불가**
+## 작업 3. 중심 대조를 세 번씩 반복  ← **타협 불가**
 
-**학습 필요. 약 30~40분.**
+**학습 필요. GPU 두 장이면 약 30~40분. 하나면 약 두 배.**
 
 ### 왜
 
@@ -114,23 +127,27 @@ done 2>&1 | tee ~/task2.log
 
 ### 명령
 
+조건은 일곱 개입니다. `ctl_base`, `w0`, `nmf0`, `lw0_nmf0`, `none`,
+`resid`, `resid_nmf0`. 암종 세 개 × 시드 세 개라 학습은 63번이고,
+9월에 한 번씩 돈 것의 세 배입니다.
+
 ```bash
 cd /home/dyan/nmf/mochi_code
-SEEDS="0 1 2" GPU=0 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
+bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
+```
+
+이 명령은 GPU 0과 1을 같이 씁니다. GPU가 하나면 0번만 지정하세요.
+그때는 약 두 배 걸립니다.
+
+```bash
+GPU=0 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
 ```
 
 - 결과는 `results/current/lr_ctl/<조건>/<암종>_s<번호>/` 에 쌓입니다.
-- **기존 `_hybrid` 폴더는 건드리지 않습니다.** 2026-09-03 단일 시드 런이라
-  그대로 두고, 논문 표는 새로 나온 `_s0/_s1/_s2` 쪽을 씁니다.
-- 끊기면 같은 명령으로 이어집니다.
-
-GPU 두 장이면 나눠 돌리셔도 됩니다.
-
-```bash
-SEEDS="0" GPU=0 bash scripts/train_ablate_p0.sh &
-SEEDS="1 2" GPU=1 bash scripts/train_ablate_p0.sh &
-wait
-```
+- **기존 `_hybrid` 폴더는 그대로 둡니다.** 2026-09-03 단일 시드 런입니다.
+  논문 표는 새로 나온 `_s0/_s1/_s2` 쪽을 씁니다.
+- 끊기면 같은 명령으로 이어집니다. 체크포인트가 있는 조건은 `skip train`
+  이 찍히고, 평가 파일(`amplitude.tsv`)이 있으면 `skip eval` 이 찍힙니다.
 
 ---
 
@@ -152,8 +169,15 @@ cd /home/dyan/nmf/mochi_code
 GPU=0 bash scripts/train_nsweep.sh 2>&1 | tee ~/task4.log
 ```
 
-환자 수 100 · 200 · 300 · 전체를 돌립니다. 암종별 전체 인원보다 큰 값은
-알아서 건너뜁니다(폐선암 223명, 신장암 203명이라 300은 생략됩니다).
+환자 수 100 · 200 · 300 · 전체를 돌립니다. 스크립트가 학습 파일의 열을
+세어, 그 인원 이상이면 건너뜁니다. 폐선암 학습은 223명이고 신장암 학습은
+300보다 적어서, 그 둘은 300이 생략됩니다. 유방암 학습 441명은 300도 돕니다.
+
+끝나는 표는 **검증 집합**의 통째 결측 오차입니다. 조기 종료에 쓴 숫자이고
+검사 집합 숫자가 아닙니다. `±` 는 초기화 흔들림입니다. 세 시드는 같은
+환자 부분표집을 쓰고, 초기화만 다릅니다.
+
+끊기면 같은 명령으로 이어집니다. 체크포인트가 있는 칸은 건너뜁니다.
 
 ---
 
@@ -173,6 +197,7 @@ GPU=0 bash scripts/train_nsweep.sh 2>&1 | tee ~/task4.log
 
 ```bash
 cd /home/dyan/nmf/mochi_code
+source /home/dyan/nmf/.nmf/bin/activate
 python eval_downstream.py \
   --data_dir processed_data/gate_brca \
   --clinical processed_data/clinical/BRCA_clinicalMatrix \
@@ -206,11 +231,13 @@ results/current/lr_nsweep/*/*/train.log
 
 | 증상 | 대처 |
 |---|---|
-| `git pull` 이 거부됨 | 로컬 수정이 남아 있습니다. `git stash` 후 다시 |
+| `git checkout` 또는 `git pull` 이 거부됨 | 로컬 수정이 남아 있습니다. `git stash` 후 다시 |
 | 검증(`test_patches.py`) 실패 | **돌리지 말고 알려주세요** |
 | `빠진 가중치` / `예상 밖 가중치` | 코드가 옛 버전입니다. 0번을 다시 확인 |
 | `경로 없음` 으로 건너뜀 | 그 조건이 학습되지 않았다는 뜻입니다. 나머지는 계속 돕니다 |
-| 작업 2에서 통째 결측 값이 전부 비슷 | 정상입니다. 위 "정상 동작 확인" 참고 |
+| `invalid device ordinal` | GPU가 하나뿐입니다. 작업 3은 `GPU=0 bash scripts/train_ablate_p0.sh` |
+| 작업 2에서 통째 결측 값이 전부 비슷 | 정상입니다. 로그의 `정상:` 줄을 보시면 됩니다 |
+| 작업 2 로그에 `Mean of empty slice` | 옛 코드입니다. 0번을 다시 받아 주세요. 지금은 그 경고 없이 0으로 채웁니다 |
 | CUDA 메모리 부족 | 알려주시면 배치 크기를 줄이겠습니다 |
 | 어떤 표의 숫자가 **완전히 동일** | 알려주세요. 설정이 안 먹었을 수 있습니다 |
 
@@ -221,5 +248,5 @@ results/current/lr_nsweep/*/*/train.log
 논문 설계가 끝났고, 본문에 들어갈 표와 그림 중 **아직 숫자가 없는 칸이
 정확히 이 다섯 개**입니다. 이게 채워지면 바로 원고를 씁니다.
 
-그리고 작업 3은 **거절 사유 하나를 30분으로 없애는 일**입니다.
+그리고 작업 3은 **거절 사유 하나를 GPU 두 장으로 30–40분에 없애는 일**입니다.
 다른 걸 못 돌리시더라도 이건 꼭 부탁드립니다.
