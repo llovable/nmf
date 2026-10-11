@@ -810,7 +810,8 @@ def test_m():
         counts = {"train": 36, "val": 20, "test": 40}
         for split, n in counts.items():
             _write_gate(data, split, n, dims, rng)
-        (data / "sample_split.tsv").write_text("sample\tsplit\n")
+        check("분할 파일 없이도 생존 평가가 준비된다",
+              not (data / "sample_split.tsv").exists())
         lines = ["sample\tOS.time\tOS"]
         surv_rng = np.random.default_rng(1)
         for split, n in counts.items():
