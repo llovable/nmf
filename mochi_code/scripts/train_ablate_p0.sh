@@ -15,6 +15,9 @@
 #
 # GPU 를 비우면 0번과 1번을 짝지어 쓴다 (9월 스크립트와 같음).
 # GPU=0 처럼 지정하면 그 장치에서만 한 조건씩 돈다.
+# COHORTS 로 암종을 갈라 두 카드에 나눠 돌릴 수 있다. 카드가 한 장뿐이면
+# GPU 지정이 순차 실행이라 작업 3이 두 배로 길어지는데, 이때 암종을 쪼개
+# 두 프로세스로 돌리는 것이 유일한 병렬화 수단이다.
 # 체크포인트가 있으면 학습을 건너뛴다. 저장 경로는 항상 _s<시드> 이고
 # 2026-09-03 단일 시드 런인 _hybrid 는 읽지도 쓰지도 않는다.
 # DRY=1 은 학습 없이 이 계약만 확인한다. DRY_ROOT 아래만 쓴다.
@@ -38,6 +41,7 @@ fi
 # SEEDS 를 주면 시드별로 돌리고 경로에 _s<시드> 를 붙인다. 기존 _hybrid 결과는
 # 2026-09-03 단일 시드 런이라 그대로 둔다. 논문 표는 시드 3개 쪽을 쓴다.
 SEEDS="${SEEDS:-0 1 2}"
+COHORTS="${COHORTS:-brca luad kirc}"
 
 dry_note() {
   [[ "${DRY:-}" == "1" ]] || return 0
@@ -173,9 +177,9 @@ run_cohort() {
 
 mkdir -p "$ROOT"
 for sd in $SEEDS; do
-  run_cohort brca "$sd"
-  run_cohort luad "$sd"
-  run_cohort kirc "$sd"
+  for coh in $COHORTS; do
+    run_cohort "$coh" "$sd"
+  done
 done
 
 echo "$(date) ALL DONE"

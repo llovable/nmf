@@ -137,12 +137,27 @@ cd /home/dyan/nmf/mochi_code
 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
 ```
 
-이 명령은 GPU 0과 1을 같이 씁니다. GPU가 하나면 0번만 지정하세요.
-그때는 약 두 배 걸립니다.
+이 명령은 GPU 0과 1을 같이 씁니다. **프로세스를 둘 띄우지 마세요** —
+네 작업이 두 카드에 몰립니다.
+
+**카드가 한 장이면** 0번만 지정합니다. 조건이 순차로 돌아 약 두 배 걸립니다.
 
 ```bash
 GPU=0 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
 ```
+
+그 두 배가 부담스러우면 암종을 갈라 두 프로세스로 돌리세요.
+
+```bash
+COHORTS="brca"      GPU=0 bash scripts/train_ablate_p0.sh &
+COHORTS="luad kirc" GPU=0 bash scripts/train_ablate_p0.sh &
+wait
+```
+
+> 한 카드에 두 작업이 올라가므로 메모리를 두 배 씁니다. 모델이 작아
+> (약 540만 개) 보통은 들어가지만, `out of memory` 가 나면 그냥 위의
+> 순차 실행으로 돌리시면 됩니다.
+
 
 - 결과는 `results/current/lr_ctl/<조건>/<암종>_s<번호>/` 에 쌓입니다.
 - **기존 `_hybrid` 폴더는 그대로 둡니다.** 2026-09-03 단일 시드 런입니다.
