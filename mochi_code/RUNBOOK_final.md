@@ -177,10 +177,13 @@ GPU=0 bash scripts/train_ablate_p0.sh 2>&1 | tee ~/task3.log
 그 두 배가 부담스러우면 암종을 갈라 두 프로세스로 돌리세요.
 
 ```bash
-COHORTS="brca"      GPU=0 bash scripts/train_ablate_p0.sh &
-COHORTS="luad kirc" GPU=0 bash scripts/train_ablate_p0.sh &
+COHORTS="brca"      GPU=0 bash scripts/train_ablate_p0.sh > ~/task3_brca.log 2>&1 &
+COHORTS="luad kirc" GPU=0 bash scripts/train_ablate_p0.sh > ~/task3_rest.log 2>&1 &
 wait
+cat ~/task3_brca.log ~/task3_rest.log > ~/task3.log
 ```
+
+두 로그 끝에 `ALL DONE` 이 있어야 합니다. 한쪽만 있으면 그 로그를 보내주세요.
 
 > 한 카드에 두 작업이 올라가므로 메모리를 두 배 씁니다. 모델이 작아
 > (약 540만 개) 보통은 들어가지만, `out of memory` 가 나면 그냥 위의
@@ -278,8 +281,8 @@ python eval_survival.py \
   2>&1 | tee -a ~/task5.log
 ```
 
-> 작업 3을 먼저 돌리셨다면 체크포인트는
-> `results/current/lr_ctl/none/brca_s0/nmf_tf_best.ckpt` 입니다.
+위의 세 경로 중 파일이 없는 것은 건너뜁니다. 작업 3을 안 돌렸어도
+9월 `_hybrid` 와 사다리 체크포인트는 그대로 잽니다.
 
 옛 비교 모델 넷(MOCHI-v5 1→1, MOCHI-v5 2→1, 공식 OmicsNMF, 공식 OmiTrans)은
 **파일이 있을 때만** 쓰고 없으면 건너뜁니다. 그래서 그 파일이 없어도
@@ -333,7 +336,7 @@ tar czf ~/mochi_results.tgz \
 | `빠진 가중치` / `예상 밖 가중치` | 코드가 옛 버전입니다. 0번을 다시 확인 |
 | `No module named lifelines` | `pip install 'lifelines>=0.27.0'` 후 작업 5만 다시 |
 | 작업 5 로그의 `[건너뜀] MOCHI-v5` / `OmicsNMF` | 정상입니다. 옛 파일이 없는 것이고 mean·TOBMI·Ridge·MOCHI는 계속 돕니다 |
-| `경로 없음` 으로 건너뜀 | 그 조건이 학습되지 않았다는 뜻입니다. 나머지는 계속 돕니다 |
+| `없음, 건너뜀` / `[건너뜀]` / `skip ... 없음` | 그 조건이 학습되지 않았다는 뜻입니다. 나머지는 계속 돕니다 |
 | `invalid device ordinal` | GPU가 하나뿐입니다. 작업 3은 `GPU=0 bash scripts/train_ablate_p0.sh` |
 | `CUDA 없음` / `CUDA 가 없습니다` | torch가 CPU 휠입니다. 0번의 GPU 확인을 보세요 |
 | `!! CUDA 가 없어 CPU 로 돕니다` | 평가는 계속 돕니다. 느리면 GPU를 고치세요 |

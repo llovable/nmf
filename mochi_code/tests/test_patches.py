@@ -791,6 +791,11 @@ def test_m():
 
     print("M) 생존 --runs 와 선택적 옛 모델")
     code = Path(__file__).resolve().parent.parent
+    warn = "!! CUDA 가 없어 CPU 로 돕니다"
+    check("평가 네 곳이 CPU면 같은 경고를 찍는다",
+          all(warn in (code / name).read_text() for name in (
+              "eval_cell_rate.py", "eval_baselines.py",
+              "eval_downstream.py", "eval_survival.py")))
     fetch = (code / "scripts" / "fetch_xena_cohort.sh").read_text()
     check("생존 테이블을 임상 행렬과 따로 받는다",
           "TCGA-${COHORT}.survival.tsv.gz" in fetch and "clinicalMatrix" in fetch)
