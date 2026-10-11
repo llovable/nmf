@@ -101,23 +101,32 @@ python eval_cell_rate.py \
 
 ### 명령
 
-세 암종 각각에 대해, **생물학 지식을 전부 끈 조건**의 체크포인트를 씁니다.
+**모델 두 개**를 각각 잽니다. 논문에서 어느 쪽을 보고할지 아직 정하지
+않았기 때문입니다 — 네 경로 해부의 "전부 끔" 조건과 사다리 끝 모델입니다.
+한쪽만 재면 나중에 다시 돌려야 합니다.
+
+아래는 있는 체크포인트만 알아서 골라 돕니다. 판단하실 것 없습니다.
 
 ```bash
 cd /home/dyan/nmf/mochi_code
 source /home/dyan/nmf/.nmf/bin/activate
 for COH in brca luad kirc; do
-  python eval_baselines.py \
-    --data_dir processed_data/gate_$COH \
-    --ckpt results/current/lr_ctl/none/${COH}_hybrid/nmf_tf_best.ckpt \
-    --split test --rate 0.3 --gpu 0 \
-    --out results/current/baselines_$COH.tsv
+  # 해부 실험의 "전부 끔". 작업 3을 돌렸으면 _s0, 아니면 9월 _hybrid.
+  ABL=results/current/lr_ctl/none/${COH}_s0
+  [[ -f "$ABL/nmf_tf_best.ckpt" ]] || ABL=results/current/lr_ctl/none/${COH}_hybrid
+  # 사다리 끝 모델.
+  LAD=results/current/lr_stage5c/c1/${COH}_s0
+  for CK in "$ABL" "$LAD"; do
+    if [[ ! -f "$CK/nmf_tf_best.ckpt" ]]; then echo "없음, 건너뜀: $CK"; continue; fi
+    echo "===== $COH  $(basename "$(dirname "$CK")") ====="
+    python eval_baselines.py \
+      --data_dir processed_data/gate_$COH \
+      --ckpt "$CK/nmf_tf_best.ckpt" \
+      --split test --rate 0.3 --gpu 0 \
+      --out "results/current/baselines_${COH}_$(basename "$(dirname "$CK")").tsv"
+  done
 done 2>&1 | tee ~/task2.log
 ```
-
-> 작업 3을 먼저 돌리셨다면 체크포인트는
-> `results/current/lr_ctl/none/${COH}_s0/nmf_tf_best.ckpt` 입니다.
-> `_hybrid` 와 `_s0` 중 있는 쪽을 쓰시면 됩니다.
 
 ### 보는 곳
 
@@ -239,7 +248,9 @@ python eval_downstream.py \
   --clinical processed_data/clinical/BRCA_clinicalMatrix \
   --mimir_dir results/current/mimir \
   --out_dir results/current/down_final --gpu 0 \
-  --runs "MOCHI=results/current/lr_ctl/none/brca_hybrid/nmf_tf_best.ckpt" \
+  --runs "MOCHI-abl=results/current/lr_ctl/none/brca_s0/nmf_tf_best.ckpt" \
+         "MOCHI-abl-old=results/current/lr_ctl/none/brca_hybrid/nmf_tf_best.ckpt" \
+         "MOCHI-ladder=results/current/lr_stage5c/c1/brca_s0/nmf_tf_best.ckpt" \
   2>&1 | tee ~/task5.log
 ```
 
@@ -261,7 +272,9 @@ python eval_survival.py \
   --data_dir processed_data/gate_brca \
   --surv processed_data/clinical/TCGA-BRCA.survival.tsv.gz \
   --out_dir results/current/surv_final --gpu 0 \
-  --runs "MOCHI=results/current/lr_ctl/none/brca_hybrid/nmf_tf_best.ckpt" \
+  --runs "MOCHI-abl=results/current/lr_ctl/none/brca_s0/nmf_tf_best.ckpt" \
+         "MOCHI-abl-old=results/current/lr_ctl/none/brca_hybrid/nmf_tf_best.ckpt" \
+         "MOCHI-ladder=results/current/lr_stage5c/c1/brca_s0/nmf_tf_best.ckpt" \
   2>&1 | tee -a ~/task5.log
 ```
 
@@ -290,7 +303,21 @@ results/current/lr_stage5c/cell_rate.tsv
 results/current/baselines_*.tsv
 results/current/lr_ctl/*/*_s*/train.log
 results/current/lr_nsweep/*/*/train.log
+results/current/down_final/downstream_auc.tsv
 results/current/surv_final/survival.tsv
+```
+
+폴더째 묶어 보내주셔도 됩니다.
+
+```bash
+cd /home/dyan/nmf/mochi_code
+tar czf ~/mochi_results.tgz \
+  results/current/lr_stage5c/cell_rate.tsv \
+  results/current/baselines_*.tsv \
+  results/current/lr_ctl/*/*_s*/train.log \
+  results/current/lr_nsweep \
+  results/current/down_final results/current/surv_final \
+  2>/dev/null; ls -lh ~/mochi_results.tgz
 ```
 
 각 로그 끝의 **요약표만 먼저 붙여주셔도** 판단은 가능합니다.
