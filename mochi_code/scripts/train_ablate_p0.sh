@@ -33,6 +33,25 @@ elif [[ "${DRY:-}" != "1" ]]; then
   exit 1
 fi
 export OMP_NUM_THREADS=8
+
+# CUDA 확인. 다른 학습 스크립트에는 있는데 여기만 빠져 있었다. torch 가 CPU
+# 휠로 깔리면 학습이 조용히 CPU 로 떨어져 몇 분짜리가 몇 시간이 된다.
+# DRY=1 은 학습을 하지 않으므로 건너뛴다.
+if [[ "${DRY:-}" != "1" ]]; then
+  "${PY:-python}" - <<'PYCHK'
+import sys
+try:
+    import torch
+except ImportError:
+    sys.exit("torch 없음")
+if not torch.cuda.is_available():
+    sys.exit(f"CUDA 없음 (torch {torch.__version__}). CPU로는 돌리지 않는다.\n"
+             "  pip install torch --index-url https://download.pytorch.org/whl/cu124")
+print(f"cuda {torch.cuda.get_device_name(0)}  "
+      f"({torch.cuda.device_count()}장)")
+PYCHK
+fi
+
 ROOT=results/current/lr_ctl
 if [[ "${DRY:-}" == "1" ]]; then
   : "${DRY_ROOT:?DRY=1 이면 DRY_ROOT 가 필요합니다}"

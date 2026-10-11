@@ -28,6 +28,25 @@ cd mochi_code && python tests/test_patches.py
 
 마지막 줄이 `모든 검증 통과` 여야 합니다. 통과 안 하면 **돌리지 말고 알려주세요.**
 
+### GPU 확인
+
+학습(작업 3·4)은 **GPU에서만 돕니다.** torch가 CPU 휠로 깔려 있으면
+예전에는 말없이 CPU로 떨어져 몇 분짜리가 몇 시간이 됐습니다. 이제는
+거기서 멈추게 해 뒀습니다.
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
+```
+
+`True` 와 카드 수가 나와야 합니다. `False` 면 torch를 다시 까세요.
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+평가만 하는 작업 1·2·5는 CPU로도 돌아가지만 느립니다. 그때는
+`!! CUDA 가 없어 CPU 로 돕니다` 경고가 찍힙니다.
+
 아래 다섯은 서로 독립이라 **순서를 바꿔도 되고 따로 돌려도 됩니다.**
 급한 순서는 3 → 2 → 1 → 4 → 5 입니다.
 
@@ -289,6 +308,8 @@ results/current/surv_final/survival.tsv
 | 작업 5 로그의 `[건너뜀] MOCHI-v5` / `OmicsNMF` | 정상입니다. 옛 파일이 없는 것이고 mean·TOBMI·Ridge·MOCHI는 계속 돕니다 |
 | `경로 없음` 으로 건너뜀 | 그 조건이 학습되지 않았다는 뜻입니다. 나머지는 계속 돕니다 |
 | `invalid device ordinal` | GPU가 하나뿐입니다. 작업 3은 `GPU=0 bash scripts/train_ablate_p0.sh` |
+| `CUDA 없음` / `CUDA 가 없습니다` | torch가 CPU 휠입니다. 0번의 GPU 확인을 보세요 |
+| `!! CUDA 가 없어 CPU 로 돕니다` | 평가는 계속 돕니다. 느리면 GPU를 고치세요 |
 | 작업 2에서 통째 결측 값이 전부 비슷 | 정상입니다. 로그의 `정상:` 줄을 보시면 됩니다 |
 | 작업 2 로그에 `Mean of empty slice` | 옛 코드입니다. 0번을 다시 받아 주세요. 지금은 그 경고 없이 0으로 채웁니다 |
 | CUDA 메모리 부족 | 알려주시면 배치 크기를 줄이겠습니다 |

@@ -307,6 +307,8 @@ def main():
     ap.add_argument("--alpha", type=float, default=0.5,
                     help="재구성에서 마스킹 칸 MSE 비중")
     # --- 5안 ---
+    ap.add_argument("--allow_cpu", action="store_true",
+                    help="CUDA 없이 CPU 로 학습한다. 매우 느리므로 기본은 거부다")
     ap.add_argument("--select_on", choices=["block", "cell"], default="block",
                     help="조기 종료·체크포인트 선택 기준. 칸 경로를 재는 실험이면 cell 로 "
                          "둬야 한다. 블록으로 고르면 칸 학습과 선택이 어긋난다")
@@ -342,6 +344,14 @@ def main():
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if not torch.cuda.is_available() and not args.allow_cpu:
+        raise SystemExit(
+            f"CUDA 가 없습니다 (torch {torch.__version__}).\n"
+            "  CPU 로도 조용히 돌아가지만 몇 분짜리가 몇 시간이 되고, 로그에는\n"
+            "  device=cpu 한 줄만 남아 알아채기 어렵습니다. 그래서 여기서 멈춥니다.\n"
+            "  대개 torch 가 CPU 휠로 깔린 경우입니다. requirements.txt 참고:\n"
+            "    pip install torch --index-url https://download.pytorch.org/whl/cu124\n"
+            "  정말 CPU 로 돌리려면 --allow_cpu 를 주세요.")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print(f"device={device} seed={args.seed}")
     train_ds = TripleSplitDataset(args.data_dir, "train")

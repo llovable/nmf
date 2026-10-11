@@ -120,6 +120,8 @@ def main():
     args = ap.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    if not torch.cuda.is_available():
+        print("!! CUDA 가 없어 CPU 로 돕니다. 느립니다. torch 가 CPU 휠인지 확인하세요.")
     train_ds = TripleSplitDataset(args.data_dir, "train")
     ds = TripleSplitDataset(args.data_dir, args.split, stats=train_ds.stats)
     print(f"device={device}  split={args.split}  n={len(ds)}  부분결측률={args.rate}")

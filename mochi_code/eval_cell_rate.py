@@ -58,6 +58,8 @@ def main():
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     print(f"device={device}  split={args.split}  mask_seed={args.mask_seed}")
+    if not torch.cuda.is_available():
+        print("!! CUDA 가 없어 CPU 로 돕니다. 느립니다. torch 가 CPU 휠인지 확인하세요.")
     root = Path(args.root)
 
     rows = []
